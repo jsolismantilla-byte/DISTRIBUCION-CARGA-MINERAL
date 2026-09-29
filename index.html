@@ -285,9 +285,10 @@
       </div>
       <div class="footnote" id="modo-explica"></div>
       <div class="field" style="margin-top:10px">
-        <label>Margen de seguridad (kg) — para no llegar exacto al payload</label>
+        <label>Margen de seguridad (kg) — solo aplica en "Pegado al payload"</label>
         <input id="in-margen" type="number" inputmode="numeric" placeholder="500" onchange="setMargen(this.value)">
       </div>
+      <div class="footnote" style="margin-top:-6px">Con 500, la meta de cada contenedor sera payload - 500 kg. Si pones un numero negativo (ej. -300), la meta sera payload + 300 kg — es decir, se permite pasar el payload a proposito.</div>
     </div>
 
     <div class="card" id="card-parciales-info"></div>
@@ -336,6 +337,9 @@
 
   <!-- ===================== REPARTO ===================== -->
   <section id="view-reparto">
+    <div class="field">
+      <input id="in-buscar-reparto" placeholder="Buscar por placa..." oninput="renderReparto()" autocapitalize="characters">
+    </div>
     <div id="reparto-banner"></div>
     <div class="footnote" style="margin-bottom:10px">Ordenado por orden de llegada real de los camiones (no por como los escribiste en la lista).</div>
     <div id="lista-reparto"></div>
@@ -504,7 +508,7 @@ function setModo(modo){
 }
 function setMargen(val){
   const m = parseFloat(val);
-  currentLote().margenSeguridad = isNaN(m)? 0 : Math.max(0,m);
+  currentLote().margenSeguridad = isNaN(m)? 0 : m;
   saveApp();
   renderContenedores();
 }
@@ -868,11 +872,33 @@ function computeTargets(){
   const lote = currentLote();
   const settled = computeSettled(lote);
   const margen = lote.margenSeguridad||0;
+  const modoPareja = (lote.modo||"pegado") === "pareja";
   const targets = {};
-  lote.contenedores.forEach(function(c,idx){
-    const cap = Math.max(0, c.payload - margen);
-    targets[idx] = (c.payload>0 && !c.cerrado)? cap : (settled.settledPerContainer[idx]||0);
-  });
+
+  if(modoPareja){
+    // Distribucion pareja: la meta de CADA contenedor abierto es el peso
+    // neto total de todos los camiones dividido entre la cantidad de
+    // contenedores abiertos (promedio simple), topado por su propio
+    // payload por seguridad fisica.
+    const abiertos = lote.contenedores.map(function(c,idx){ return idx; })
+      .filter(function(idx){ return lote.contenedores[idx].payload>0 && !lote.contenedores[idx].cerrado; });
+    const totalPeso = lote.camiones.reduce(function(s,c){ return s+(c.peso||0); },0);
+    const promedio = abiertos.length? (totalPeso/abiertos.length) : 0;
+    lote.contenedores.forEach(function(c,idx){
+      if(c.payload>0 && !c.cerrado){
+        targets[idx] = Math.max(settled.settledPerContainer[idx]||0, Math.min(c.payload, promedio));
+      }else{
+        targets[idx] = settled.settledPerContainer[idx]||0;
+      }
+    });
+  }else{
+    // Pegado al payload: la meta es el payload de cada contenedor, menos
+    // (o mas, si el margen es negativo) el margen de seguridad.
+    lote.contenedores.forEach(function(c,idx){
+      const cap = Math.max(0, c.payload - margen);
+      targets[idx] = (c.payload>0 && !c.cerrado)? cap : (settled.settledPerContainer[idx]||0);
+    });
+  }
   return targets;
 }
 
@@ -1052,7 +1078,18 @@ function renderReparto(){
     ? '<div class="banner">Hay peso sin asignar: no quedan contenedores enteros o parciales con espacio. Agrega otro contenedor.</div>'
     : "";
 
-  box.innerHTML = arrival.map(function(camIdx){
+  const buscarEl = document.getElementById("in-buscar-reparto");
+  const buscar = (buscarEl? buscarEl.value : "").trim().toLowerCase();
+  const arrivalFiltrado = buscar
+    ? arrival.filter(function(camIdx){ return (lote.camiones[camIdx].placa||"").toLowerCase().indexOf(buscar)>=0; })
+    : arrival;
+
+  if(buscar && arrivalFiltrado.length===0){
+    box.innerHTML = '<div class="empty">Ningun camion con placa que contenga "' + buscar + '".</div>';
+    return;
+  }
+
+  box.innerHTML = arrivalFiltrado.map(function(camIdx){
     const cam = lote.camiones[camIdx];
     const info = perCamion[camIdx];
     const splitsHtml = info.splits.map(function(s){
@@ -1103,9 +1140,11 @@ function computeResumenContenedores(){
   const dist = computeDistribution();
   const perCamion = dist.perCamion;
   const coscoAcum = {};
-  lote.contenedores.forEach(function(c,idx){ coscoAcum[idx]=0; });
+  const bultosAcum = {};
+  lote.contenedores.forEach(function(c,idx){ coscoAcum[idx]=0; bultosAcum[idx]=0; });
   perCamion.forEach(function(info,camIdx){
     info.splits.forEach(function(s){
+      bultosAcum[s.contIdx] = (bultosAcum[s.contIdx]||0) + (s.bultos||0);
       const key = camIdx+"_"+s.contIdx;
       const v = lote.cosco[key];
       if(v!==undefined && v!=="" && !isNaN(v)) coscoAcum[s.contIdx] += parseFloat(v);
@@ -1124,7 +1163,7 @@ function computeResumenContenedores(){
       else{ estadoClass="estado-disp"; estadoTxt="disponible"; }
     }
     return {idx:idx, codigo:c.codigo, tara:c.tara, payload:c.payload, cerrado:!!c.cerrado, tipo:c.parcial?"parcial":"entero",
-      cosco:cosco, bruto:bruto, disponible:disponible, pct:pct, estadoClass:estadoClass, estadoTxt:estadoTxt};
+      cosco:cosco, bultos:bultosAcum[idx]||0, bruto:bruto, disponible:disponible, pct:pct, estadoClass:estadoClass, estadoTxt:estadoTxt};
   });
 }
 
@@ -1177,6 +1216,7 @@ function renderResumen(){
       + '<td>' + f.codigo + ' <span class="pill ' + (f.tipo==="parcial"?"amber":"blue") + '" style="font-size:9px">' + tipoLbl + '</span></td>'
       + '<td>' + fmt(f.tara) + '</td>'
       + '<td>' + fmt(f.payload) + '</td>'
+      + '<td>' + f.bultos + '</td>'
       + '<td>' + fmt(f.cosco) + '</td>'
       + '<td>' + fmt(f.bruto) + '</td>'
       + '<td>' + f.pct.toFixed(1) + '%</td>'
@@ -1185,7 +1225,7 @@ function renderResumen(){
   }).join("");
 
   box.innerHTML = '<div style="overflow-x:auto"><table><thead><tr>'
-    + '<th>Contenedor</th><th>Tara</th><th>Payload</th><th>Peso COSCO acum.</th><th>Peso bruto est.</th><th>% llenado</th><th>Estado</th>'
+    + '<th>Contenedor</th><th>Tara</th><th>Payload</th><th>Bultos</th><th>Peso COSCO acum.</th><th>Peso bruto est.</th><th>% llenado</th><th>Estado</th>'
     + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
 }
 
@@ -1227,7 +1267,7 @@ function buildArrastreRows(){
 
 const ARRASTRE_HEADERS = ["Llegada","Placa","Tracto","Bultos Camion","Peso Guia Camion (kg)",
   "Contenedor","Bultos","Peso Estimado (kg)","Peso COSCO (kg)","Diferencia (kg)"];
-const RESUMEN_HEADERS = ["Codigo","Tara (kg)","Payload (kg)","Peso COSCO Acum. (kg)",
+const RESUMEN_HEADERS = ["Codigo","Tara (kg)","Payload (kg)","Bultos","Peso COSCO Acum. (kg)",
   "Peso Bruto Estimado (kg)","% Llenado","Estado"];
 
 function hoyISO(){ return new Date().toISOString().slice(0,10); }
@@ -1273,7 +1313,7 @@ function exportExcel(){
   XLSX.utils.book_append_sheet(wb, wsArr, "Arrastre");
 
   const resumenRows = computeResumenContenedores().map(function(f){
-    return [f.codigo, f.tara, f.payload, Math.round(f.cosco), Math.round(f.bruto), Math.round(f.pct*10)/10 + "%", f.estadoTxt];
+    return [f.codigo, f.tara, f.payload, f.bultos, Math.round(f.cosco), Math.round(f.bruto), Math.round(f.pct*10)/10 + "%", f.estadoTxt];
   });
   const wsRes = XLSX.utils.aoa_to_sheet([RESUMEN_HEADERS].concat(resumenRows));
   XLSX.utils.book_append_sheet(wb, wsRes, "Resumen Contenedores");
@@ -1318,7 +1358,7 @@ function exportPDF(){
   doc.setTextColor(0);
 
   const resumenRows = computeResumenContenedores().map(function(f){
-    return [f.codigo, fmt(f.tara), fmt(f.payload), fmt(f.cosco), fmt(f.bruto), f.pct.toFixed(1)+"%", f.estadoTxt];
+    return [f.codigo, fmt(f.tara), fmt(f.payload), f.bultos, fmt(f.cosco), fmt(f.bruto), f.pct.toFixed(1)+"%", f.estadoTxt];
   });
   doc.autoTable({
     startY: 64,
