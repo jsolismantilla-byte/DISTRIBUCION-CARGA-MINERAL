@@ -113,6 +113,12 @@
   .pill.ok{color:var(--green); border-color:var(--green-dim); background:var(--green-dim);}
   .pill.warn{color:var(--red); border-color:var(--red-dim); background:var(--red-dim);}
   .pill.amber{color:var(--amber); border-color:var(--amber-dim); background:var(--amber-dim);}
+  .badge-parcial{
+    display:inline-flex; align-items:center; gap:6px;
+    background:var(--amber); color:#1A1200; font-weight:800; font-size:16px;
+    padding:6px 14px; border-radius:9px; margin-bottom:7px; letter-spacing:.3px;
+  }
+  .badge-parcial .ico{font-size:17px;}
 
   .split{background:var(--surface-2); border-radius:8px; padding:10px; margin-top:8px;}
   .split .head{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px;}
@@ -348,6 +354,7 @@
     </div>
     <div class="card">
       <h2>Resumen por contenedor - peso bascula COSCO</h2>
+      <div id="resumen-banner"></div>
       <div id="tabla-resumen"></div>
       <div class="footnote">Payload y Tara son los que definiste en "Contenedores". El peso COSCO acumulado solo suma lo que hayas registrado en la pestana Reparto, lo que aun no se pesa no cuenta.</div>
     </div>
@@ -723,6 +730,21 @@ function delContenedor(i){
   saveApp();
   renderContenedores();
 }
+function getParcialRanks(lote){
+  // Numera los contenedores marcados como "parcial" en el orden real en que
+  // se van a usar (por su "orden entre parciales", o por orden de ingreso si
+  // no se puso numero). Devuelve {idx: rango 1,2,3...}
+  const marcados = lote.contenedores.map(function(c,idx){ return idx; }).filter(function(idx){ return lote.contenedores[idx].parcial; });
+  const ordenados = marcados.slice().sort(function(a,b){
+    const ca = lote.contenedores[a], cb = lote.contenedores[b];
+    const oa = (ca.ordenParcial!=null && ca.ordenParcial!=="" && !isNaN(ca.ordenParcial))? parseFloat(ca.ordenParcial) : (a+1000);
+    const ob = (cb.ordenParcial!=null && cb.ordenParcial!=="" && !isNaN(cb.ordenParcial))? parseFloat(cb.ordenParcial) : (b+1000);
+    return oa-ob;
+  });
+  const ranks = {};
+  ordenados.forEach(function(idx,i){ ranks[idx] = i+1; });
+  return ranks;
+}
 function computeParcialesInfo(){
   const lote = currentLote();
   const dist = computeDistribution();
@@ -747,26 +769,40 @@ function renderContenedores(){
   const box = document.getElementById("lista-contenedores");
   const targets = computeTargets();
   const info = computeParcialesInfo();
+  const faltan = info.parcialesReales - info.marcados;
+  const avisoParciales = faltan > 0
+    ? '<div class="banner" style="margin-top:8px">Te faltan marcar <b>' + faltan + '</b> contenedor(es) mas como "reservado para parciales" para cubrir lo que necesitas.</div>'
+    : (info.marcados > info.parcialesReales
+        ? '<div class="footnote" style="margin-top:8px">Tienes ' + (info.marcados - info.parcialesReales) + ' contenedor(es) marcados de mas — no es un problema, solo quedaran sin usarse como parcial.</div>'
+        : '<div class="footnote" style="margin-top:8px; color:var(--green)">Tienes exactamente los parciales que necesitas marcados.</div>');
   document.getElementById("card-parciales-info").innerHTML =
-    '<h2>Estado de este lote</h2>'
-    + '<div class="l2" style="font-size:13px">Contenedores activos: <b style="color:var(--amber)">' + info.activos + '</b>'
-    + ' (<b style="color:var(--green)">' + info.abiertos + ' abiertos</b> / <b style="color:var(--red)">' + info.cerrados + ' cerrados</b>)<br>'
-    + 'Marcados por ti como "reservado para parciales": <b style="color:var(--amber)">' + info.marcados + '</b><br>'
-    + 'Van a recibir mas de un camion con los datos actuales: <b style="color:var(--amber)">' + info.parcialesReales + '</b></div>'
-    + '<div class="footnote">El peso restante se reparte solo entre los contenedores abiertos. Cierra un contenedor cuando ya no deba recibir mas carga; el sistema recalcula automaticamente entre los que sigan abiertos.</div>';
+    '<h2>Contenedores parciales que necesitas</h2>'
+    + '<div style="display:flex; align-items:baseline; gap:10px; margin:2px 0 10px">'
+    + '<span style="font-size:34px; font-weight:800; color:var(--amber); line-height:1">' + info.parcialesReales + '</span>'
+    + '<span style="font-size:13px; color:var(--text-dim)">contenedor(es) parciales necesarios, de ' + info.activos + ' activos<br>('
+    + '<b style="color:var(--green)">' + info.abiertos + ' abiertos</b> / <b style="color:var(--red)">' + info.cerrados + ' cerrados</b>)</span>'
+    + '</div>'
+    + '<div class="l2" style="font-size:13px">Ya marcaste como "reservado para parciales": <b style="color:var(--amber)">' + info.marcados + '</b></div>'
+    + avisoParciales
+    + '<div class="footnote">Este numero se recalcula solo con los camiones y contenedores que ya ingresaste, segun el modo de reparto activo (equitativo o pegado al payload).</div>';
   if(lote.contenedores.length===0){
     box.innerHTML = '<div class="empty">Sin contenedores todavia. Agrega el primero arriba.</div>';
     return;
   }
+  const parcialRanks = getParcialRanks(lote);
   const label = lote.modoReparto==="maximo" ? "Meta (hasta payload)" : "Target equitativo";
   box.innerHTML = lote.contenedores.map(function(c,i){
     const tgt = targets[i]||0;
     const estadoPill = c.cerrado
       ? '<span class="pill warn">CERRADO</span>'
       : '<span class="pill ok">ABIERTO</span>';
+    const badgeParcial = c.parcial
+      ? '<div class="badge-parcial"><span class="ico">\ud83d\udd36</span>PARCIAL ' + (parcialRanks[i]||"?") + '</div>'
+      : '';
     return '<div class="list-item">'
       + '<div class="main">'
-      + '<div class="l1">' + c.codigo + ' ' + estadoPill + (c.parcial? ' <span class="pill amber">parcial' + ((c.ordenParcial!=null && c.ordenParcial!=="")? " #"+c.ordenParcial : "") + '</span>':'') + '</div>'
+      + badgeParcial
+      + '<div class="l1">' + c.codigo + ' ' + estadoPill + '</div>'
       + '<div class="l2">Tara ' + fmt(c.tara) + ' kg - Payload ' + fmt(c.payload) + ' kg - ' + label + ' <span class="pill amber">' + fmt(tgt) + ' kg</span></div>'
       + '</div>'
       + '<div style="display:flex;flex-direction:column;gap:5px;align-items:stretch">'
@@ -861,11 +897,9 @@ function computeDistribution(){
   // ordenados por el numero de "orden entre parciales" que hayas puesto
   // (o por orden de ingreso si no pusiste numero).
   const activos = lote.contenedores.map(function(c,idx){ return idx; }).filter(function(idx){ return lote.contenedores[idx].payload>0 && !lote.contenedores[idx].cerrado; });
+  const parcialRanks = getParcialRanks(lote);
   const parcialesOrdenados = activos.filter(function(idx){ return lote.contenedores[idx].parcial; }).slice().sort(function(a,b){
-    const ca = lote.contenedores[a], cb = lote.contenedores[b];
-    const oa = (ca.ordenParcial!=null && ca.ordenParcial!=="" && !isNaN(ca.ordenParcial))? parseFloat(ca.ordenParcial) : (a+1000);
-    const ob = (cb.ordenParcial!=null && cb.ordenParcial!=="" && !isNaN(cb.ordenParcial))? parseFloat(cb.ordenParcial) : (b+1000);
-    return oa-ob;
+    return (parcialRanks[a]||9999) - (parcialRanks[b]||9999);
   });
   const ordenApertura = activos.filter(function(idx){ return !lote.contenedores[idx].parcial; }).concat(parcialesOrdenados);
   const perCamion = [];
@@ -948,6 +982,7 @@ function renderReparto(){
   }
   const dist = computeDistribution();
   const perCamion = dist.perCamion;
+  const parcialRanks = getParcialRanks(lote);
   const haySobrante = perCamion.some(function(p){ return p.sobrante>0; });
   banner.innerHTML = haySobrante
     ? '<div class="banner">Hay peso sin asignar: los contenedores activos ya no tienen espacio. Agrega otro contenedor o revisa los payloads.</div>'
@@ -963,8 +998,9 @@ function renderReparto(){
       const estadoPill = s.settled
         ? '<span class="pill ok">confirmado</span>'
         : '<span class="pill amber">pendiente</span>';
+      const parcialTag = (cont && cont.parcial)? (' \ud83d\udd36P' + (parcialRanks[s.contIdx]||"?")) : '';
       return '<div class="split">'
-        + '<div class="head"><span class="cont">' + (cont? cont.codigo : "?") + ' ' + estadoPill + '</span><span class="bultos">' + s.bultos + ' bultos</span></div>'
+        + '<div class="head"><span class="cont">' + (cont? cont.codigo : "?") + parcialTag + ' ' + estadoPill + '</span><span class="bultos">' + s.bultos + ' bultos</span></div>'
         + '<div class="vals">'
         + '<div><span class="lab">' + (s.settled? "Peso confirmado":"Peso estimado") + '</span><br>' + fmt(s.pesoEstimado) + ' kg</div>'
         + '<div><span class="lab">Peso COSCO real</span>'
@@ -1011,12 +1047,38 @@ function computeResumenContenedores(){
     const pct = c.payload? (cosco/c.payload*100) : 0;
     let estadoClass = "estado-sin", estadoTxt = "sin usar";
     if(c.payload>0){
-      if(cosco<=0){ estadoClass="estado-sin"; estadoTxt="sin pesar"; }
-      else if(disponible<=0){ estadoClass="estado-lleno"; estadoTxt="lleno"; }
+      if(disponible<0){ estadoClass="estado-lleno"; estadoTxt="EXCEDE PAYLOAD"; }
+      else if(cosco<=0){ estadoClass="estado-sin"; estadoTxt="sin pesar"; }
+      else if(disponible===0){ estadoClass="estado-lleno"; estadoTxt="lleno"; }
       else{ estadoClass="estado-disp"; estadoTxt="disponible"; }
     }
-    return {codigo:c.codigo, tara:c.tara, payload:c.payload, cosco:cosco, bruto:bruto, pct:pct, estadoClass:estadoClass, estadoTxt:estadoTxt};
+    return {idx:idx, codigo:c.codigo, tara:c.tara, payload:c.payload, cerrado:!!c.cerrado, cosco:cosco, bruto:bruto, disponible:disponible, pct:pct, estadoClass:estadoClass, estadoTxt:estadoTxt};
   });
+}
+
+function computeExcesos(){
+  const lote = currentLote();
+  const filas = computeResumenContenedores();
+  const totalPeso = lote.camiones.reduce(function(s,c){ return s+(c.peso||0); },0);
+  const totalBultos = lote.camiones.reduce(function(s,c){ return s+(c.bultos||0); },0);
+  const avgPesoBulto = totalBultos? (totalPeso/totalBultos) : 0;
+  const excesos = [];
+  filas.forEach(function(f){
+    if(f.disponible < 0){
+      const exceso = -f.disponible;
+      let mejor = null;
+      filas.forEach(function(g){
+        if(g.idx===f.idx || g.cerrado || g.payload<=0) return;
+        if(mejor===null || g.disponible > mejor.disponible) mejor = g;
+      });
+      excesos.push({
+        codigo: f.codigo, exceso: exceso,
+        bultos: avgPesoBulto? Math.ceil(exceso/avgPesoBulto) : null,
+        destino: (mejor && mejor.disponible>0)? mejor : null
+      });
+    }
+  });
+  return excesos;
 }
 
 function renderResumen(){
@@ -1025,6 +1087,16 @@ function renderResumen(){
   if(lote.contenedores.length===0){
     box.innerHTML = '<div class="empty">Agrega contenedores para ver el resumen.</div>';
     return;
+  }
+  const excesos = computeExcesos();
+  const bannerBox = document.getElementById("resumen-banner");
+  if(bannerBox){
+    bannerBox.innerHTML = excesos.map(function(e){
+      const bultosTxt = e.bultos!==null? (' (~' + e.bultos + ' bulto(s))') : '';
+      return e.destino
+        ? ('<div class="banner">\u26a0 ' + e.codigo + ' excede su payload por ' + fmt(e.exceso) + ' kg' + bultosTxt + '. Pasa ese exceso al contenedor <b>' + e.destino.codigo + '</b> (le quedan ' + fmt(e.destino.disponible) + ' kg disponibles).</div>')
+        : ('<div class="banner">\u26a0 ' + e.codigo + ' excede su payload por ' + fmt(e.exceso) + ' kg' + bultosTxt + '. No hay otro contenedor abierto con espacio — agrega uno nuevo.</div>');
+    }).join("");
   }
   const filas = computeResumenContenedores();
   const rows = filas.map(function(f){
