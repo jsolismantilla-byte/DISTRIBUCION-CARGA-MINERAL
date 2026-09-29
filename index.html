@@ -311,6 +311,8 @@
         <div><div class="t">Reservar para parciales</div>
         <div class="d">Este contenedor se usara de ultimo para abrir carga nueva: se prioriza para combinar sobras de varios camiones en vez de recibir un camion completo de entrada.</div></div>
       </label>
+      <div class="field"><label>Orden de uso entre parciales (opcional)</label><input id="in-orden-parcial" type="number" inputmode="numeric" placeholder="1, 2, 3..."></div>
+      <div class="footnote" style="margin-top:-6px">Si marcaste varios contenedores como "parcial", este numero decide cual se usa primero: se llena por completo uno antes de abrir el siguiente. Si lo dejas vacio, se usa el orden en que los agregaste.</div>
       <label class="radio-opt">
         <input type="checkbox" id="in-cerrado">
         <div><div class="t">Contenedor cerrado</div>
@@ -627,18 +629,20 @@ function guardarContenedor(){
   const tara = parseFloat(document.getElementById("in-tara").value) || 0;
   const payload = parseFloat(document.getElementById("in-payload").value);
   const parcial = document.getElementById("in-parcial").checked;
+  const ordenParcialRaw = document.getElementById("in-orden-parcial").value;
+  const ordenParcial = ordenParcialRaw===""? null : parseFloat(ordenParcialRaw);
   const cerrado = document.getElementById("in-cerrado").checked;
   if(!codigo || !payload){ alert("Completa el codigo y el payload maximo."); return; }
   const lote = currentLote();
   if(editandoContenedorIdx!==null){
     const c = lote.contenedores[editandoContenedorIdx];
-    c.codigo = codigo; c.tara = tara; c.payload = payload; c.parcial = parcial; c.cerrado = cerrado;
+    c.codigo = codigo; c.tara = tara; c.payload = payload; c.parcial = parcial; c.ordenParcial = ordenParcial; c.cerrado = cerrado;
     editandoContenedorIdx = null;
   }else{
-    lote.contenedores.push({codigo:codigo, tara:tara, payload:payload, parcial:parcial, cerrado:cerrado});
+    lote.contenedores.push({codigo:codigo, tara:tara, payload:payload, parcial:parcial, ordenParcial:ordenParcial, cerrado:cerrado});
   }
   saveApp();
-  ["in-codigo","in-tara","in-payload"].forEach(function(id){ document.getElementById(id).value=""; });
+  ["in-codigo","in-tara","in-payload","in-orden-parcial"].forEach(function(id){ document.getElementById(id).value=""; });
   document.getElementById("in-parcial").checked = false;
   document.getElementById("in-cerrado").checked = false;
   actualizarFormContenedorUI();
@@ -656,6 +660,7 @@ function editarContenedor(i){
   document.getElementById("in-tara").value = c.tara;
   document.getElementById("in-payload").value = c.payload;
   document.getElementById("in-parcial").checked = !!c.parcial;
+  document.getElementById("in-orden-parcial").value = (c.ordenParcial===null || c.ordenParcial===undefined)? "" : c.ordenParcial;
   document.getElementById("in-cerrado").checked = !!c.cerrado;
   editandoContenedorIdx = i;
   actualizarFormContenedorUI();
@@ -663,7 +668,7 @@ function editarContenedor(i){
 }
 function cancelarEdicionContenedor(){
   editandoContenedorIdx = null;
-  ["in-codigo","in-tara","in-payload"].forEach(function(id){ document.getElementById(id).value=""; });
+  ["in-codigo","in-tara","in-payload","in-orden-parcial"].forEach(function(id){ document.getElementById(id).value=""; });
   document.getElementById("in-parcial").checked = false;
   document.getElementById("in-cerrado").checked = false;
   actualizarFormContenedorUI();
@@ -690,7 +695,7 @@ function agregarContenedoresEnBloque(){
       errores.push("Linea " + (idx+1) + ": \"" + linea + "\" - faltan datos o formato invalido");
       return;
     }
-    lote.contenedores.push({codigo:codigo, tara:tara, payload:payload, parcial:false, cerrado:false});
+    lote.contenedores.push({codigo:codigo, tara:tara, payload:payload, parcial:false, ordenParcial:null, cerrado:false});
     agregados++;
   });
   saveApp();
@@ -761,7 +766,7 @@ function renderContenedores(){
       : '<span class="pill ok">ABIERTO</span>';
     return '<div class="list-item">'
       + '<div class="main">'
-      + '<div class="l1">' + c.codigo + ' ' + estadoPill + (c.parcial? ' <span class="pill amber">parcial</span>':'') + '</div>'
+      + '<div class="l1">' + c.codigo + ' ' + estadoPill + (c.parcial? ' <span class="pill amber">parcial' + ((c.ordenParcial!=null && c.ordenParcial!=="")? " #"+c.ordenParcial : "") + '</span>':'') + '</div>'
       + '<div class="l2">Tara ' + fmt(c.tara) + ' kg - Payload ' + fmt(c.payload) + ' kg - ' + label + ' <span class="pill amber">' + fmt(tgt) + ' kg</span></div>'
       + '</div>'
       + '<div style="display:flex;flex-direction:column;gap:5px;align-items:stretch">'
@@ -773,99 +778,149 @@ function renderContenedores(){
   }).join("");
 }
 
+function computeSettled(lote){
+  // Lo que ya tiene peso COSCO registrado se considera "liquidado": ya se
+  // descargo de verdad y no debe volver a repartirse entre los abiertos.
+  const settledPerTruck = lote.camiones.map(function(){ return 0; });
+  const settledPerContainer = {};
+  lote.contenedores.forEach(function(c,idx){ settledPerContainer[idx] = 0; });
+  const settledSplitsPerTruck = lote.camiones.map(function(){ return []; });
+  Object.keys(lote.cosco).forEach(function(key){
+    const parts = key.split("_").map(Number);
+    const ci = parts[0], cj = parts[1];
+    const raw = lote.cosco[key];
+    if(raw===undefined || raw==="" || isNaN(raw)) return;
+    if(ci<0 || ci>=lote.camiones.length || cj<0 || cj>=lote.contenedores.length) return;
+    const peso = parseFloat(raw);
+    settledPerTruck[ci] += peso;
+    settledPerContainer[cj] = (settledPerContainer[cj]||0) + peso;
+    settledSplitsPerTruck[ci].push({contIdx:cj, peso:peso});
+  });
+  return {settledPerTruck:settledPerTruck, settledPerContainer:settledPerContainer, settledSplitsPerTruck:settledSplitsPerTruck};
+}
+
 function computeTargets(){
   const lote = currentLote();
+  const settled = computeSettled(lote);
   const active = lote.contenedores.map(function(c,idx){ return Object.assign({}, c, {idx:idx}); }).filter(function(c){ return c.payload>0 && !c.cerrado; });
   const n = active.length;
   const targets = {};
-  lote.contenedores.forEach(function(c,idx){ targets[idx]=0; });
+  // Por defecto (contenedores cerrados o inactivos): se quedan exactamente
+  // en lo que ya tienen liquidado, no reciben nada mas.
+  lote.contenedores.forEach(function(c,idx){ targets[idx] = settled.settledPerContainer[idx]||0; });
   if(n===0) return targets;
 
+  // Capacidad disponible de cada contenedor abierto = payload menos lo que
+  // ya esta liquidado ahi (puede venir de cualquier camion).
+  const cap = {};
+  active.forEach(function(c){ cap[c.idx] = Math.max(0, c.payload - (settled.settledPerContainer[c.idx]||0)); });
+
   if(lote.modoReparto === "maximo"){
-    active.forEach(function(c){ targets[c.idx] = c.payload; });
+    active.forEach(function(c){ targets[c.idx] = (settled.settledPerContainer[c.idx]||0) + cap[c.idx]; });
     return targets;
   }
 
-  const totalNeto = lote.camiones.reduce(function(s,c){ return s+(c.peso||0); },0);
-  const sorted = active.slice().sort(function(a,b){ return a.payload-b.payload; });
+  // Solo se reparte el PENDIENTE: lo que a cada camion le falta descargar
+  // (su peso guia menos lo que ya liquido, en cualquier contenedor).
+  const totalPendiente = lote.camiones.reduce(function(s,c,i){
+    return s + Math.max(0, (c.peso||0) - (settled.settledPerTruck[i]||0));
+  }, 0);
+
+  const sorted = active.slice().sort(function(a,b){ return cap[a.idx]-cap[b.idx]; });
   let best = -Infinity, cum = 0;
   for(let i=0;i<n;i++){
-    const cand = (totalNeto - cum) / (n - i);
+    const cand = (totalPendiente - cum) / (n - i);
     if(cand > best) best = cand;
-    cum += sorted[i].payload;
+    cum += cap[sorted[i].idx];
   }
-  const L = best;
-  active.forEach(function(c){ targets[c.idx] = Math.min(c.payload, L); });
+  const L = Math.max(0, best);
+  active.forEach(function(c){
+    const share = Math.min(cap[c.idx], L);
+    targets[c.idx] = (settled.settledPerContainer[c.idx]||0) + share;
+  });
   return targets;
 }
 
 function computeDistribution(){
   const lote = currentLote();
+  const settled = computeSettled(lote);
   const targets = computeTargets();
   const modoMaximo = lote.modoReparto === "maximo";
+
+  // El saldo arranca en lo que ya esta liquidado (COSCO), no en 0.
   const saldo = {};
-  lote.contenedores.forEach(function(c,idx){ saldo[idx]=0; });
+  lote.contenedores.forEach(function(c,idx){ saldo[idx] = settled.settledPerContainer[idx]||0; });
+  // pendingAssigned rastrea solo lo que se reparte EN ESTE CALCULO, para
+  // saber si un contenedor ya esta "abierto" para el pendiente o sigue
+  // "virgen" aunque ya tenga algo liquidado de antes.
+  const pendingAssigned = {};
+  lote.contenedores.forEach(function(c,idx){ pendingAssigned[idx] = 0; });
+
   // Orden de apertura de contenedores nuevos: primero los NO marcados como
-  // "parcial" (en el orden en que se ingresaron), y al final los marcados,
-  // para que estos ultimos queden reservados para combinar sobras.
+  // "parcial" (en el orden en que se ingresaron); al final los marcados,
+  // ordenados por el numero de "orden entre parciales" que hayas puesto
+  // (o por orden de ingreso si no pusiste numero).
   const activos = lote.contenedores.map(function(c,idx){ return idx; }).filter(function(idx){ return lote.contenedores[idx].payload>0 && !lote.contenedores[idx].cerrado; });
-  const ordenApertura = activos.filter(function(idx){ return !lote.contenedores[idx].parcial; })
-    .concat(activos.filter(function(idx){ return lote.contenedores[idx].parcial; }));
+  const parcialesOrdenados = activos.filter(function(idx){ return lote.contenedores[idx].parcial; }).slice().sort(function(a,b){
+    const ca = lote.contenedores[a], cb = lote.contenedores[b];
+    const oa = (ca.ordenParcial!=null && ca.ordenParcial!=="" && !isNaN(ca.ordenParcial))? parseFloat(ca.ordenParcial) : (a+1000);
+    const ob = (cb.ordenParcial!=null && cb.ordenParcial!=="" && !isNaN(cb.ordenParcial))? parseFloat(cb.ordenParcial) : (b+1000);
+    return oa-ob;
+  });
+  const ordenApertura = activos.filter(function(idx){ return !lote.contenedores[idx].parcial; }).concat(parcialesOrdenados);
   const perCamion = [];
 
   function elegirAbrirNuevo(){
     for(let oi=0; oi<ordenApertura.length; oi++){
       const idx = ordenApertura[oi];
-      const tgt = targets[idx]||0;
-      if(tgt<=0) continue;
-      if(saldo[idx]===0) return idx;
+      const remcap = (targets[idx]||0) - saldo[idx];
+      if(remcap<=0.01) continue;
+      if(pendingAssigned[idx]===0) return idx;
     }
     return null;
   }
 
-  lote.camiones.forEach(function(cam){
-    let remaining = cam.peso || 0;
+  lote.camiones.forEach(function(cam, camIdx){
     const pesoProm = cam.bultos? cam.peso/cam.bultos : 0;
-    const splits = [];
+    const settledSplits = settled.settledSplitsPerTruck[camIdx];
+    let remaining = Math.max(0, (cam.peso||0) - (settled.settledPerTruck[camIdx]||0));
+    const pendingSplits = [];
 
-    if(modoMaximo){
-      // Llena cada contenedor hasta su tope antes de pasar al siguiente,
-      // en el mismo orden de apertura (no marcados primero).
-      for(let oi=0; oi<ordenApertura.length; oi++){
-        const idx = ordenApertura[oi];
-        if(remaining <= 0.01) break;
-        const remcap = lote.contenedores[idx].payload - saldo[idx];
-        if(remcap <= 0.01) continue;
-        const assign = Math.min(remaining, remcap);
-        splits.push({contIdx:idx, peso:assign});
-        saldo[idx] += assign;
-        remaining -= assign;
-      }
-    }else{
-      while(remaining > 0.01){
-        // 1) Cierra primero cualquier contenedor ya abierto (parcial en curso),
-        //    priorizando el que le falta menos para completarse.
-        let best = null, bestRem = Infinity;
-        lote.contenedores.forEach(function(c,idx){
-          const tgt = targets[idx]||0;
-          if(tgt<=0) return;
-          if(saldo[idx] > 0 && saldo[idx] < tgt){
-            const rem = tgt - saldo[idx];
-            if(rem < bestRem){ bestRem = rem; best = idx; }
-          }
-        });
-        // 2) Si no hay ninguno abierto, recien ahi se abre uno nuevo.
-        if(best===null) best = elegirAbrirNuevo();
-        if(best===null) break;
-        const remcap = targets[best] - saldo[best];
-        const assign = Math.min(remaining, remcap);
-        splits.push({contIdx:best, peso:assign});
-        saldo[best] += assign;
-        remaining -= assign;
+    if(remaining > 0.01){
+      if(modoMaximo){
+        for(let oi=0; oi<ordenApertura.length; oi++){
+          const idx = ordenApertura[oi];
+          if(remaining <= 0.01) break;
+          const remcap = (targets[idx]||0) - saldo[idx];
+          if(remcap <= 0.01) continue;
+          const assign = Math.min(remaining, remcap);
+          pendingSplits.push({contIdx:idx, peso:assign});
+          saldo[idx] += assign; pendingAssigned[idx] += assign; remaining -= assign;
+        }
+      }else{
+        while(remaining > 0.01){
+          let best = null, bestRem = Infinity;
+          lote.contenedores.forEach(function(c,idx){
+            const tgt = targets[idx]||0;
+            if(tgt<=0) return;
+            if(pendingAssigned[idx] > 0 && saldo[idx] < tgt){
+              const rem = tgt - saldo[idx];
+              if(rem < bestRem){ bestRem = rem; best = idx; }
+            }
+          });
+          if(best===null) best = elegirAbrirNuevo();
+          if(best===null) break;
+          const remcap = targets[best] - saldo[best];
+          const assign = Math.min(remaining, remcap);
+          pendingSplits.push({contIdx:best, peso:assign});
+          saldo[best] += assign; pendingAssigned[best] += assign; remaining -= assign;
+        }
       }
     }
 
     const sobrante = remaining>0.01? remaining : 0;
+    const splits = settledSplits.map(function(s){ return {contIdx:s.contIdx, peso:s.peso, settled:true}; })
+      .concat(pendingSplits.map(function(s){ return {contIdx:s.contIdx, peso:s.peso, settled:false}; }));
     let bultosUsados = 0;
     splits.forEach(function(s,i){
       if(i===splits.length-1){
@@ -874,7 +929,7 @@ function computeDistribution(){
         s.bultos = pesoProm? Math.round(s.peso/pesoProm) : 0;
         bultosUsados += s.bultos;
       }
-      s.pesoEstimado = s.bultos * pesoProm;
+      s.pesoEstimado = s.settled? s.peso : (s.bultos * pesoProm);
     });
     perCamion.push({splits:splits, sobrante:sobrante, pesoProm:pesoProm});
   });
@@ -904,11 +959,14 @@ function renderReparto(){
       const cont = lote.contenedores[s.contIdx];
       const key = i+"_"+s.contIdx;
       const coscoVal = lote.cosco[key];
-      const diff = (coscoVal!==undefined && coscoVal!=="" && !isNaN(coscoVal))? (parseFloat(coscoVal) - s.pesoEstimado) : null;
+      const diff = (!s.settled && coscoVal!==undefined && coscoVal!=="" && !isNaN(coscoVal))? (parseFloat(coscoVal) - s.pesoEstimado) : null;
+      const estadoPill = s.settled
+        ? '<span class="pill ok">confirmado</span>'
+        : '<span class="pill amber">pendiente</span>';
       return '<div class="split">'
-        + '<div class="head"><span class="cont">' + (cont? cont.codigo : "?") + '</span><span class="bultos">' + s.bultos + ' bultos</span></div>'
+        + '<div class="head"><span class="cont">' + (cont? cont.codigo : "?") + ' ' + estadoPill + '</span><span class="bultos">' + s.bultos + ' bultos</span></div>'
         + '<div class="vals">'
-        + '<div><span class="lab">Peso estimado</span><br>' + fmt(s.pesoEstimado) + ' kg</div>'
+        + '<div><span class="lab">' + (s.settled? "Peso confirmado":"Peso estimado") + '</span><br>' + fmt(s.pesoEstimado) + ' kg</div>'
         + '<div><span class="lab">Peso COSCO real</span>'
         + '<input type="number" inputmode="decimal" placeholder="kg bascula" value="' + (coscoVal!==undefined? coscoVal : "") + '" onchange="setCosco(' + i + ',' + s.contIdx + ',this.value)"></div>'
         + '</div>'
