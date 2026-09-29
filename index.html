@@ -1185,6 +1185,7 @@ function renderReparto(){
   }
   const dist = computeDistribution();
   const perCamion = dist.perCamion;
+  const targets = dist.targets;
   const enteroRanks = getEnteroRanks(lote);
   const parcialRanks = getParcialRanks(lote);
   const arrival = getArrivalOrder(lote);
@@ -1192,6 +1193,14 @@ function renderReparto(){
   banner.innerHTML = haySobrante
     ? '<div class="banner">Hay peso sin asignar: no quedan contenedores enteros o parciales con espacio. Agrega otro contenedor.</div>'
     : "";
+
+  // acumulado real (peso ya asignado, sumando todos los camiones) por contenedor,
+  // para poder mostrar "de cuanto va" cada uno junto a su meta actual
+  const acumPorContenedor = {};
+  lote.contenedores.forEach(function(c,idx){ acumPorContenedor[idx] = 0; });
+  perCamion.forEach(function(info){
+    info.splits.forEach(function(s){ acumPorContenedor[s.contIdx] = (acumPorContenedor[s.contIdx]||0) + s.peso; });
+  });
 
   const buscarEl = document.getElementById("in-buscar-reparto");
   const buscar = (buscarEl? buscarEl.value : "").trim().toLowerCase();
@@ -1219,6 +1228,8 @@ function renderReparto(){
       const tipoTag = s.tipo==="parcial"
         ? ('<span class="pill amber">PARCIAL' + numTxt + '</span>')
         : ('<span class="pill blue">ENTERO' + numTxt + '</span>');
+      const metaCont = targets[s.contIdx]||0;
+      const acumCont = acumPorContenedor[s.contIdx]||0;
       return '<div class="split">'
         + '<div class="head"><span class="cont">' + (cont? cont.codigo : "?") + '</span>' + tipoTag + ' ' + estadoPill + '<span class="bultos">' + s.bultos + ' bultos</span></div>'
         + '<div class="vals">'
@@ -1226,6 +1237,7 @@ function renderReparto(){
         + '<div><span class="lab">Peso COSCO real</span>'
         + '<input type="number" inputmode="decimal" placeholder="kg bascula" value="' + (coscoVal!==undefined? coscoVal : "") + '" onchange="setCosco(' + camIdx + ',' + s.contIdx + ',this.value)"></div>'
         + '</div>'
+        + '<div class="footnote" style="margin-top:6px">Meta de ' + (cont? cont.codigo : "?") + ': <b>' + fmt(metaCont) + ' kg</b> — lleva acumulado (todos los camiones): <b>' + fmt(acumCont) + ' kg</b></div>'
         + (diff!==null? ('<div class="diff ' + (diff>=0?'pos':'neg') + '">Diferencia: ' + (diff>=0?"+":"") + fmt(diff) + ' kg</div>') : "")
         + '</div>';
     }).join("");
