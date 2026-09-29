@@ -291,6 +291,14 @@
       <div class="footnote" style="margin-top:-6px">Con 500, la meta de cada contenedor sera payload - 500 kg. Si pones un numero negativo (ej. -300), la meta sera payload + 300 kg — es decir, se permite pasar el payload a proposito.</div>
     </div>
 
+    <div class="card">
+      <h2>Estimacion rapida (mientras no tengas los contenedores posicionados)</h2>
+      <div class="footnote" style="margin-top:0">Si todavia no sabes con exactitud que contenedores vas a usar, pon aqui cuantos planeas trabajar y te calculo cuanto peso le tocaria a cada uno, sin esperar a que los ingreses uno por uno.</div>
+      <div class="field"><label>Cuantos contenedores vas a trabajar</label><input id="in-calc-n" type="number" inputmode="numeric" placeholder="6" oninput="actualizarCalcRapido()"></div>
+      <div class="field" id="wrap-calc-payload"><label>Payload tipico de cada contenedor (kg)</label><input id="in-calc-payload" type="number" inputmode="numeric" placeholder="28000" oninput="actualizarCalcRapido()"></div>
+      <div id="calc-rapido-resultado"></div>
+    </div>
+
     <div class="card" id="card-parciales-info"></div>
 
     <div class="card">
@@ -753,9 +761,59 @@ function delContenedor(i){
   saveApp();
   renderContenedores();
 }
+function actualizarCalcRapido(){
+  const lote = currentLote();
+  if(!lote.calcRapido) lote.calcRapido = {};
+  lote.calcRapido.n = document.getElementById("in-calc-n").value;
+  lote.calcRapido.payloadTipico = document.getElementById("in-calc-payload").value;
+  saveApp();
+  renderCalcRapido();
+}
+function renderCalcRapido(){
+  const lote = currentLote();
+  const box = document.getElementById("calc-rapido-resultado");
+  const modo = lote.modo || "pegado";
+  document.getElementById("wrap-calc-payload").style.display = (modo==="pegado")? "block" : "none";
+
+  const n = parseFloat(document.getElementById("in-calc-n").value);
+  const totalPeso = lote.camiones.reduce(function(s,c){ return s+(c.peso||0); },0);
+
+  if(!n || n<=0){
+    box.innerHTML = '<div class="footnote">Escribe cuantos contenedores planeas usar para ver el estimado (con ' + fmt(totalPeso) + ' kg de camiones ingresados hasta ahora).</div>';
+    return;
+  }
+
+  if(modo==="pareja"){
+    const meta = totalPeso/n;
+    box.innerHTML = '<div class="l2" style="font-size:13px">Con <b>' + n + '</b> contenedores y ' + fmt(totalPeso) + ' kg de camiones ya ingresados, cada contenedor deberia recibir aproximadamente</div>'
+      + '<div style="font-size:26px; font-weight:800; color:var(--amber); margin:4px 0">' + fmt(meta) + ' kg</div>'
+      + '<div class="footnote">Cuando ya sepas los codigos reales, agrega los contenedores en la lista de abajo — el sistema seguira usando esta misma logica de reparto pareja.</div>';
+  }else{
+    const payload = parseFloat(document.getElementById("in-calc-payload").value);
+    const margen = lote.margenSeguridad||0;
+    if(!payload){
+      box.innerHTML = '<div class="footnote">Escribe tambien el payload tipico de cada contenedor para ver el estimado.</div>';
+      return;
+    }
+    const metaCada = Math.max(0, payload-margen);
+    const capacidadTotal = metaCada*n;
+    const diff = capacidadTotal-totalPeso;
+    box.innerHTML = '<div class="l2" style="font-size:13px">Cada contenedor de ~' + fmt(payload) + ' kg de payload recibiria hasta</div>'
+      + '<div style="font-size:26px; font-weight:800; color:var(--amber); margin:4px 0">' + fmt(metaCada) + ' kg</div>'
+      + '<div class="l2" style="font-size:13px">Con <b>' + n + '</b> contenedores asi, tendrias ' + fmt(capacidadTotal) + ' kg de capacidad contra ' + fmt(totalPeso) + ' kg de camiones — '
+      + (diff>=0
+          ? ('te sobrarian <b style="color:var(--green)">' + fmt(diff) + ' kg</b> de capacidad.')
+          : ('te faltarian <b style="color:var(--red)">' + fmt(-diff) + ' kg</b>; necesitarias unos <b>' + Math.ceil(totalPeso/metaCada) + '</b> contenedores en vez de ' + n + '.'))
+      + '</div>';
+  }
+}
 function renderContenedores(){
   const lote = currentLote();
   const box = document.getElementById("lista-contenedores");
+  if(!lote.calcRapido) lote.calcRapido = {n:"", payloadTipico:""};
+  document.getElementById("in-calc-n").value = lote.calcRapido.n||"";
+  document.getElementById("in-calc-payload").value = lote.calcRapido.payloadTipico||"";
+  renderCalcRapido();
   const targets = computeTargets();
   const info = computeParcialesInfo();
   const faltan = info.parcialesReales - info.marcados;
