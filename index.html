@@ -293,10 +293,11 @@
 
     <div class="card">
       <h2>Estimacion rapida (mientras no tengas los contenedores posicionados)</h2>
-      <div class="footnote" style="margin-top:0">Si todavia no sabes con exactitud que contenedores vas a usar, pon aqui cuantos planeas trabajar y te calculo cuanto peso le tocaria a cada uno, sin esperar a que los ingreses uno por uno.</div>
+      <div class="footnote" style="margin-top:0">Si todavia no sabes con exactitud que contenedores vas a usar, pon aqui cuantos planeas trabajar y genera contenedores de marcador (editables despues) para que el reparto real ya funcione con ellos, sin esperar a tener los codigos definitivos.</div>
       <div class="field"><label>Cuantos contenedores vas a trabajar</label><input id="in-calc-n" type="number" inputmode="numeric" placeholder="6" oninput="actualizarCalcRapido()"></div>
       <div class="field" id="wrap-calc-payload"><label>Payload tipico de cada contenedor (kg)</label><input id="in-calc-payload" type="number" inputmode="numeric" placeholder="28000" oninput="actualizarCalcRapido()"></div>
       <div id="calc-rapido-resultado"></div>
+      <button class="btn-primary" style="margin-top:10px" onclick="generarContenedores()">Generar estos contenedores</button>
     </div>
 
     <div class="card" id="card-parciales-info"></div>
@@ -676,9 +677,10 @@ function guardarContenedor(){
   if(editandoContenedorIdx!==null){
     const c = lote.contenedores[editandoContenedorIdx];
     c.codigo = codigo; c.tara = tara; c.payload = payload; c.parcial = parcial; c.orden = orden; c.cerrado = cerrado;
+    c.generado = false;
     editandoContenedorIdx = null;
   }else{
-    lote.contenedores.push({codigo:codigo, tara:tara, payload:payload, parcial:parcial, orden:orden, cerrado:cerrado});
+    lote.contenedores.push({codigo:codigo, tara:tara, payload:payload, parcial:parcial, orden:orden, cerrado:cerrado, generado:false});
   }
   saveApp();
   ["in-codigo","in-tara","in-payload","in-orden"].forEach(function(id){ document.getElementById(id).value=""; });
@@ -785,9 +787,9 @@ function renderCalcRapido(){
 
   if(modo==="pareja"){
     const meta = totalPeso/n;
-    box.innerHTML = '<div class="l2" style="font-size:13px">Con <b>' + n + '</b> contenedores y ' + fmt(totalPeso) + ' kg de camiones ya ingresados, cada contenedor deberia recibir aproximadamente</div>'
-      + '<div style="font-size:26px; font-weight:800; color:var(--amber); margin:4px 0">' + fmt(meta) + ' kg</div>'
-      + '<div class="footnote">Cuando ya sepas los codigos reales, agrega los contenedores en la lista de abajo — el sistema seguira usando esta misma logica de reparto pareja.</div>';
+    box.innerHTML = '<div class="l2" style="font-size:13px">Con <b>' + n + '</b> contenedores y ' + fmt(totalPeso) + ' kg de camiones ya ingresados, ese sera el peso de trabajo de TODOS los contenedores:</div>'
+      + '<div style="font-size:26px; font-weight:800; color:var(--amber); margin:4px 0">' + fmt(meta) + ' kg cada uno</div>'
+      + '<div class="footnote">Presiona "Generar estos contenedores" para crearlos ya con ese peso como payload de trabajo, y que el reparto real funcione con ellos. Cuando sepas los codigos reales, edita cada uno (boton "Editar" en la lista de abajo) para ponerselos.</div>';
   }else{
     const payload = parseFloat(document.getElementById("in-calc-payload").value);
     const margen = lote.margenSeguridad||0;
@@ -804,9 +806,63 @@ function renderCalcRapido(){
       + (diff>=0
           ? ('te sobrarian <b style="color:var(--green)">' + fmt(diff) + ' kg</b> de capacidad.')
           : ('te faltarian <b style="color:var(--red)">' + fmt(-diff) + ' kg</b>; necesitarias unos <b>' + Math.ceil(totalPeso/metaCada) + '</b> contenedores en vez de ' + n + '.'))
-      + '</div>';
+      + '</div>'
+      + '<div class="footnote">Presiona "Generar estos contenedores" para crearlos con el payload de ' + fmt(payload) + ' kg (trabajando pegado al payload con tu margen de seguridad); el reparto real usara ese peso, no el de reparto pareja.</div>';
   }
 }
+
+function generarContenedores(){
+  const lote = currentLote();
+  const n = parseFloat(document.getElementById("in-calc-n").value);
+  if(!n || n<=0){ alert("Escribe cuantos contenedores vas a trabajar."); return; }
+  const modo = lote.modo || "pegado";
+  const totalPeso = lote.camiones.reduce(function(s,c){ return s+(c.peso||0); },0);
+
+  let payloadCada;
+  if(modo==="pareja"){
+    if(totalPeso<=0){ alert("Ingresa primero los camiones para poder calcular el peso pareja."); return; }
+    payloadCada = totalPeso/n;
+  }else{
+    const payloadTipico = parseFloat(document.getElementById("in-calc-payload").value);
+    if(!payloadTipico){ alert("Escribe el payload tipico de cada contenedor."); return; }
+    payloadCada = payloadTipico;
+  }
+
+  const hayGenerados = lote.contenedores.some(function(c){ return c.generado; });
+  if(hayGenerados && !confirm("Ya tienes contenedores generados automaticamente; se van a reemplazar por estos " + n + " nuevos (los contenedores reales que hayas agregado a mano NO se tocan). Continuar?")) return;
+
+  const oldToNew = {};
+  const nuevaLista = [];
+  lote.contenedores.forEach(function(c, oldIdx){
+    if(c.generado) return;
+    oldToNew[oldIdx] = nuevaLista.length;
+    nuevaLista.push(c);
+  });
+  const nuevoCosco = {};
+  Object.keys(lote.cosco).forEach(function(key){
+    const parts = key.split("_").map(Number);
+    const ci = parts[0], cj = parts[1];
+    if(oldToNew[cj]!==undefined){
+      nuevoCosco[ci+"_"+oldToNew[cj]] = lote.cosco[key];
+    }
+  });
+  lote.contenedores = nuevaLista;
+  lote.cosco = nuevoCosco;
+
+  for(let i=1; i<=n; i++){
+    lote.contenedores.push({
+      codigo: "Contenedor " + i + " (por definir)",
+      tara: 0,
+      payload: Math.round(payloadCada),
+      parcial: false, orden: null, cerrado: false, generado: true
+    });
+  }
+  if(editandoContenedorIdx!==null) cancelarEdicionContenedor();
+  saveApp();
+  renderContenedores();
+  alert("Se generaron " + n + " contenedores de " + fmt(payloadCada) + " kg de payload cada uno. Edita cada uno (boton \"Editar\") para ponerle su codigo real cuando lo sepas.");
+}
+
 function renderContenedores(){
   const lote = currentLote();
   const box = document.getElementById("lista-contenedores");
@@ -842,13 +898,14 @@ function renderContenedores(){
       ? '<span class="pill warn">CERRADO</span>'
       : '<span class="pill ok">ABIERTO</span>';
     const numTxt = (c.orden!=null && c.orden!=="")? (' ' + c.orden) : '';
+    const generadoPill = c.generado? ' <span class="pill amber">GENERADO</span>' : '';
     const badge = c.parcial
       ? '<div class="badge-grande parcial"><span class="ico">\ud83d\udd36</span>PARCIAL' + numTxt + '</div>'
       : '<div class="badge-grande entero"><span class="ico">\ud83d\udce6</span>ENTERO' + numTxt + '</div>';
     return '<div class="list-item">'
       + '<div class="main">'
       + badge
-      + '<div class="l1">' + c.codigo + ' ' + estadoPill + '</div>'
+      + '<div class="l1">' + c.codigo + ' ' + estadoPill + generadoPill + '</div>'
       + '<div class="l2">Tara ' + fmt(c.tara) + ' kg - Payload ' + fmt(c.payload) + ' kg - Meta ' + fmt(tgt) + ' kg</div>'
       + '</div>'
       + '<div style="display:flex;flex-direction:column;gap:5px;align-items:stretch">'
@@ -1019,7 +1076,7 @@ function computeDistribution(){
       splits.forEach(function(s,i){
         if(i===splits.length-1){ s.bultos = Math.max(0, (cam.bultos||0)-bultosUsados); }
         else{ s.bultos = pesoProm? Math.round(s.peso/pesoProm):0; bultosUsados+=s.bultos; }
-        s.pesoEstimado = s.settled? s.peso : (s.bultos*pesoProm);
+        s.pesoEstimado = s.peso;
       });
       perCamion[camIdx] = {splits:splits, sobrante:sobrante, pesoProm:pesoProm, arrivalRank:(arrival.indexOf(camIdx)+1)};
     });
@@ -1088,7 +1145,7 @@ function computeDistribution(){
     splits.forEach(function(s,i){
       if(i===splits.length-1){ s.bultos = Math.max(0, (cam.bultos||0) - bultosUsados); }
       else{ s.bultos = pesoProm? Math.round(s.peso/pesoProm) : 0; bultosUsados += s.bultos; }
-      s.pesoEstimado = s.settled? s.peso : (s.bultos*pesoProm);
+      s.pesoEstimado = s.peso;
     });
 
     perCamion[camIdx] = {splits:splits, sobrante:sobrante, pesoProm:pesoProm, arrivalRank:arrivalRank+1};
