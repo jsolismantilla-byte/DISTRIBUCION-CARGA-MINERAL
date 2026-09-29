@@ -1,0 +1,1514 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Reparto de Contenedores</title>
+<style>
+  :root{
+    --bg:#0F1720;
+    --surface:#1B2530;
+    --surface-2:#222E3A;
+    --line:#33404D;
+    --text:#E8ECEF;
+    --text-dim:#93A1AC;
+    --amber:#F5A623;
+    --amber-dim:#4A3A17;
+    --green:#4CAF7D;
+    --green-dim:#183426;
+    --red:#E15554;
+    --red-dim:#3A1E1E;
+    --blue:#5AA9E6;
+    --blue-dim:#173247;
+    --mono: ui-monospace, "SF Mono", "Roboto Mono", "Cascadia Mono", Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  *{box-sizing:border-box;}
+  html,body{
+    margin:0; padding:0; height:100%;
+    background:var(--bg); color:var(--text);
+    font-family:var(--sans);
+    -webkit-tap-highlight-color:transparent;
+  }
+  body{
+    padding-top:env(safe-area-inset-top,0px);
+    padding-bottom:calc(64px + env(safe-area-inset-bottom,0px));
+    min-height:100%;
+  }
+  #pantalla-app{ padding-bottom:64px; }
+  header{
+    position:sticky; top:env(safe-area-inset-top,0px); z-index:10;
+    background:var(--bg); border-bottom:1px solid var(--line);
+    padding:12px 16px 10px;
+  }
+  header .top-row{display:flex; justify-content:space-between; align-items:flex-start; gap:10px;}
+  header h1{margin:0; font-size:15px; font-weight:700; letter-spacing:.2px;}
+  header .lote-info{font-size:12px; color:var(--amber); margin-top:2px; font-family:var(--mono);}
+  header .btn-cambiar{
+    background:transparent; border:1px solid var(--line); color:var(--text-dim);
+    font-size:11px; padding:6px 10px; border-radius:7px; white-space:nowrap;
+  }
+  header .totales{
+    display:flex; gap:14px; margin-top:8px; font-family:var(--mono); font-size:12px; color:var(--text-dim);
+  }
+  header .totales b{color:var(--amber); font-weight:600;}
+  header .hdr-modo{margin-top:9px;}
+  .seg-hdr button{font-size:11.5px; padding:8px 4px;}
+  main{padding:14px 16px 24px;}
+  section{display:none;}
+  section.active{display:block;}
+
+  .card{
+    background:var(--surface); border:1px solid var(--line); border-radius:10px;
+    padding:14px; margin-bottom:12px;
+  }
+  .card h2{margin:0 0 10px; font-size:14px; font-weight:600; color:var(--text-dim); text-transform:none;}
+
+  .field{margin-bottom:10px;}
+  .field label{display:block; font-size:12px; color:var(--text-dim); margin-bottom:4px;}
+  .field input{
+    width:100%; padding:11px 10px; border-radius:8px; border:1px solid var(--line);
+    background:var(--surface-2); color:var(--text); font-size:15px; font-family:var(--mono);
+  }
+  .field input::placeholder{color:#5B6873; font-family:var(--sans);}
+  .field textarea{
+    width:100%; padding:10px; border-radius:8px; border:1px solid var(--line);
+    background:var(--surface-2); color:var(--text); font-size:13px; font-family:var(--mono);
+    resize:vertical;
+  }
+  .field textarea::placeholder{color:#5B6873; font-family:var(--mono); font-size:12px;}
+  .row2{display:grid; grid-template-columns:1fr 1fr; gap:10px;}
+  .row3{display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px;}
+
+  button{
+    font-family:var(--sans); font-size:14px; font-weight:600; border:none; border-radius:8px;
+    padding:11px 16px; cursor:pointer;
+  }
+  .btn-primary{background:var(--amber); color:#1A1200; width:100%;}
+  .btn-primary:active{opacity:.85;}
+  .btn-ghost{background:transparent; color:var(--text-dim); border:1px solid var(--line); padding:6px 10px; font-size:12px;}
+  .btn-danger-ghost{background:transparent; color:var(--red); border:1px solid var(--red); padding:5px 9px; font-size:12px;}
+  .btn-export{color:#fff; padding:13px 10px; font-size:13px;}
+  .btn-export.xls{background:#1D6F42;}
+  .btn-export.pdf{background:#B3271F;}
+  .btn-export:active{opacity:.85;}
+
+  .list-item{
+    display:flex; justify-content:space-between; align-items:center; gap:10px;
+    padding:10px 0; border-bottom:1px solid var(--line);
+  }
+  .list-item:last-child{border-bottom:none;}
+  .list-item .main{flex:1; min-width:0;}
+  .list-item .main .l1{font-family:var(--mono); font-weight:600; font-size:14px;}
+  .list-item .main .l2{font-size:12px; color:var(--text-dim); margin-top:2px;}
+
+  .empty{
+    text-align:center; color:var(--text-dim); font-size:13px; padding:26px 10px;
+    border:1px dashed var(--line); border-radius:10px;
+  }
+
+  .pill{
+    display:inline-block; font-family:var(--mono); font-size:11px; padding:2px 8px;
+    border-radius:20px; background:var(--surface-2); color:var(--text-dim); border:1px solid var(--line);
+  }
+  .pill.ok{color:var(--green); border-color:var(--green-dim); background:var(--green-dim);}
+  .pill.warn{color:var(--red); border-color:var(--red-dim); background:var(--red-dim);}
+  .pill.amber{color:var(--amber); border-color:var(--amber-dim); background:var(--amber-dim);}
+  .pill.blue{color:var(--blue); border-color:var(--blue-dim); background:var(--blue-dim);}
+
+  .badge-grande{
+    display:inline-flex; align-items:center; gap:6px;
+    font-weight:800; font-size:16px;
+    padding:6px 14px; border-radius:9px; margin-bottom:7px; letter-spacing:.3px;
+  }
+  .badge-grande.parcial{background:var(--amber); color:#1A1200;}
+  .badge-grande.entero{background:var(--blue); color:#08202E;}
+  .badge-grande .ico{font-size:17px;}
+
+  .split{background:var(--surface-2); border-radius:8px; padding:10px; margin-top:8px;}
+  .split .head{display:flex; justify-content:space-between; align-items:baseline; margin-bottom:6px; flex-wrap:wrap; gap:4px;}
+  .split .head .cont{font-family:var(--mono); font-weight:700; font-size:13px;}
+  .split .head .bultos{font-size:12px; color:var(--text-dim);}
+  .split .vals{display:grid; grid-template-columns:1fr 1fr; gap:8px; font-size:12px;}
+  .split .vals .lab{color:var(--text-dim);}
+  .split .vals input{
+    width:100%; padding:7px 8px; border-radius:6px; border:1px solid var(--line);
+    background:var(--bg); color:var(--text); font-family:var(--mono); font-size:13px; margin-top:3px;
+  }
+  .diff{font-family:var(--mono); font-size:12px; margin-top:6px;}
+  .diff.pos{color:var(--red);}
+  .diff.neg{color:#6FB6FF;}
+
+  .banner{
+    padding:10px 12px; border-radius:8px; font-size:13px; margin-bottom:12px;
+    background:var(--red-dim); color:#FFD3D1; border:1px solid var(--red);
+  }
+
+  table{width:100%; border-collapse:collapse; font-size:12.5px;}
+  th,td{padding:8px 6px; text-align:right; border-bottom:1px solid var(--line); font-family:var(--mono);}
+  th:first-child, td:first-child{text-align:left; font-family:var(--sans);}
+  th{color:var(--text-dim); font-weight:600; font-size:11px;}
+  .estado-lleno{color:var(--red);}
+  .estado-disp{color:var(--green);}
+  .estado-sin{color:var(--text-dim);}
+
+  nav.tabs{
+    position:fixed; bottom:0; left:0; right:0; z-index:20;
+    display:flex; background:var(--surface); border-top:1px solid var(--line);
+    padding-bottom:env(safe-area-inset-bottom,0px);
+  }
+  nav.tabs button{
+    flex:1; background:transparent; color:var(--text-dim); border-radius:0;
+    padding:11px 4px 9px; font-size:11px; display:flex; flex-direction:column; align-items:center; gap:3px;
+  }
+  nav.tabs button .ico{font-size:18px; line-height:1;}
+  nav.tabs button.active{color:var(--amber);}
+
+  .footnote{font-size:11px; color:var(--text-dim); margin-top:10px; line-height:1.5;}
+
+  #pantalla-lotes{padding:18px 16px calc(28px + env(safe-area-inset-bottom,0px));}
+  #pantalla-lotes h1{font-size:19px; margin:6px 0 4px;}
+  #pantalla-lotes .sub{color:var(--text-dim); font-size:13px; margin-bottom:18px;}
+  .lote-card{
+    background:var(--surface); border:1px solid var(--line); border-radius:10px;
+    padding:14px; margin-bottom:10px; display:flex; justify-content:space-between; gap:10px;
+    align-items:center;
+  }
+  .lote-card .info{flex:1; min-width:0;}
+  .lote-card .booking{font-family:var(--mono); font-weight:700; font-size:14px;}
+  .lote-card .cliente{font-size:13px; color:var(--text); margin-top:2px;}
+  .lote-card .meta{font-size:11px; color:var(--text-dim); margin-top:4px; font-family:var(--mono);}
+  .lote-card .abrir{background:var(--amber); color:#1A1200; padding:9px 14px; font-size:13px; flex-shrink:0;}
+
+  .seg{display:flex; border:1px solid var(--line); border-radius:9px; overflow:hidden;}
+  .seg button{flex:1; background:var(--surface-2); color:var(--text-dim); border-radius:0; font-size:12.5px; padding:11px 6px;}
+  .seg button.active{background:var(--amber); color:#1A1200;}
+
+  .radio-opt{
+    display:flex; align-items:flex-start; gap:10px; padding:10px; border:1px solid var(--line);
+    border-radius:8px; margin-bottom:8px; cursor:pointer;
+  }
+  .radio-opt input{margin-top:3px;}
+  .radio-opt .t{font-size:13px; font-weight:600;}
+  .radio-opt .d{font-size:11.5px; color:var(--text-dim); margin-top:2px;}
+</style>
+</head>
+<body>
+
+<!-- ===================== SELECTOR DE LOTES ===================== -->
+<div id="pantalla-lotes">
+  <h1>Reparto de Contenedores</h1>
+  <div class="sub">Cada lote es un booking/cliente independiente. Puedes tener varios abiertos y cambiar entre ellos cuando quieras.</div>
+
+  <div id="lista-lotes"></div>
+
+  <div class="card" style="margin-top:16px">
+    <h2>Nuevo lote</h2>
+    <div class="row2">
+      <div class="field"><label>Booking</label><input id="in-booking" placeholder="BK-45210" autocapitalize="characters"></div>
+      <div class="field"><label>Cliente</label><input id="in-cliente" placeholder="Minera XYZ"></div>
+    </div>
+    <button class="btn-primary" onclick="crearLote()">Crear lote y continuar</button>
+  </div>
+</div>
+
+<!-- ===================== APP PRINCIPAL ===================== -->
+<div id="pantalla-app" style="display:none">
+
+<header>
+  <div class="top-row">
+    <div>
+      <h1>Reparto de Contenedores</h1>
+      <div class="lote-info" id="hdr-lote-info"></div>
+    </div>
+    <button class="btn-cambiar" onclick="cambiarLote()">Cambiar lote</button>
+  </div>
+  <div class="totales">
+    <span><b id="totCamiones">0</b> camiones</span>
+    <span><b id="totBultos">0</b> bultos</span>
+    <span><b id="totPeso">0</b> kg guia</span>
+  </div>
+  <div class="hdr-modo">
+    <div class="seg seg-hdr">
+      <button id="btn-modo-pegado-hdr" onclick="setModo('pegado')">Pegado al payload</button>
+      <button id="btn-modo-pareja-hdr" onclick="setModo('pareja')">Distribucion pareja</button>
+    </div>
+  </div>
+</header>
+
+<main>
+
+  <!-- ===================== CAMIONES ===================== -->
+  <section id="view-camiones" class="active">
+    <div class="card">
+      <h2 id="titulo-form-camion">Agregar camion</h2>
+      <div class="field"><label>Placa</label><input id="in-placa" placeholder="TAU-859" autocapitalize="characters"></div>
+      <div class="row2">
+        <div class="field"><label>Tracto</label><input id="in-tracto" placeholder="TR-101" autocapitalize="characters"></div>
+        <div class="field"><label>Bultos</label><input id="in-bultos" type="number" inputmode="numeric" placeholder="24"></div>
+      </div>
+      <div class="row2">
+        <div class="field"><label>Peso Neto segun Guia (kg)</label><input id="in-peso" type="number" inputmode="decimal" placeholder="35060"></div>
+        <div class="field"><label>Orden de llegada (opcional)</label><input id="in-orden-llegada" type="number" inputmode="numeric" placeholder="1, 2, 3..."></div>
+      </div>
+      <div class="footnote" style="margin-top:-6px">La lista de camiones es solo referencial. Pon aqui el orden real en que van llegando al puerto para que el sistema sepa cual descarga primero. Si lo dejas vacio, se usa el orden en que los escribiste.</div>
+      <div class="row2" style="margin-top:8px">
+        <button class="btn-primary" id="btn-guardar-camion" onclick="guardarCamion()">Agregar camion</button>
+        <button class="btn-ghost" id="btn-cancelar-camion" style="display:none" onclick="cancelarEdicionCamion()">Cancelar edicion</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Agregar varios camiones a la vez</h2>
+      <div class="field">
+        <label>Un camion por linea: Placa, Tracto, Bultos, Peso Guia (kg), Orden de llegada (opcional)</label>
+        <textarea id="in-bulk-camiones" rows="5" placeholder="TAU-859, TR-101, 24, 35060, 1&#10;CJN-830, TR-102, 23, 34690, 2&#10;T8F871, , 24, 34420"></textarea>
+      </div>
+      <div class="footnote">El tracto y el orden de llegada pueden ir vacios (deja la coma). Separa cada dato con coma; una linea por camion.</div>
+      <button class="btn-primary" style="margin-top:8px" onclick="agregarCamionesEnBloque()">Agregar todos</button>
+      <div id="bulk-camiones-resultado" class="footnote"></div>
+    </div>
+
+    <div class="card">
+      <h2>Camiones ingresados</h2>
+      <div id="lista-camiones"></div>
+    </div>
+  </section>
+
+  <!-- ===================== CONTENEDORES ===================== -->
+  <section id="view-contenedores">
+    <div class="card">
+      <h2>Modo de reparto de este lote</h2>
+      <div class="seg">
+        <button id="btn-modo-pegado" onclick="setModo('pegado')">Pegado al payload</button>
+        <button id="btn-modo-pareja" onclick="setModo('pareja')">Distribucion pareja</button>
+      </div>
+      <div class="footnote" id="modo-explica"></div>
+      <div class="field" style="margin-top:10px">
+        <label>Margen de seguridad (kg) — solo aplica en "Pegado al payload"</label>
+        <input id="in-margen" type="number" inputmode="numeric" placeholder="500" onchange="setMargen(this.value)">
+      </div>
+      <div class="footnote" style="margin-top:-6px">Con 500, la meta de cada contenedor sera payload - 500 kg. Si pones un numero negativo (ej. -300), la meta sera payload + 300 kg — es decir, se permite pasar el payload a proposito.</div>
+    </div>
+
+    <div class="card">
+      <h2>Estimacion rapida (mientras no tengas los contenedores posicionados)</h2>
+      <div class="footnote" style="margin-top:0">Si todavia no sabes con exactitud que contenedores vas a usar, pon aqui cuantos planeas trabajar y genera contenedores de marcador (editables despues) para que el reparto real ya funcione con ellos, sin esperar a tener los codigos definitivos.</div>
+      <div class="field"><label>Cuantos contenedores vas a trabajar</label><input id="in-calc-n" type="number" inputmode="numeric" placeholder="6" oninput="actualizarCalcRapido()"></div>
+      <div class="field" id="wrap-calc-payload"><label>Payload tipico de cada contenedor (kg)</label><input id="in-calc-payload" type="number" inputmode="numeric" placeholder="28000" oninput="actualizarCalcRapido()"></div>
+      <div id="calc-rapido-resultado"></div>
+      <button class="btn-primary" style="margin-top:10px" onclick="generarContenedores()">Generar estos contenedores</button>
+    </div>
+
+    <div class="card" id="card-parciales-info"></div>
+
+    <div class="card">
+      <h2>Agregar varios contenedores a la vez</h2>
+      <div class="field">
+        <label>Un contenedor por linea: Codigo, Tara, Payload</label>
+        <textarea id="in-bulk-contenedores" rows="5" placeholder="MSCU 123456 7, 2250, 28230&#10;CMAU 234567 8, 2300, 28180"></textarea>
+      </div>
+      <div class="footnote">Separa cada dato con coma; una linea por contenedor. Se agregan como "entero", abiertos y sin orden fijo.</div>
+      <button class="btn-primary" style="margin-top:8px" onclick="agregarContenedoresEnBloque()">Agregar todos</button>
+      <div id="bulk-contenedores-resultado" class="footnote"></div>
+    </div>
+
+    <div class="card">
+      <h2 id="titulo-form-contenedor">Agregar contenedor</h2>
+      <div class="field"><label>Codigo de Contenedor</label><input id="in-codigo" placeholder="MSCU 123456 7" autocapitalize="characters"></div>
+      <div class="row2">
+        <div class="field"><label>Tara (kg)</label><input id="in-tara" type="number" inputmode="numeric" placeholder="2250"></div>
+        <div class="field"><label>Payload max. (kg)</label><input id="in-payload" type="number" inputmode="numeric" placeholder="28230"></div>
+      </div>
+      <label class="radio-opt">
+        <input type="checkbox" id="in-parcial">
+        <div><div class="t">Es contenedor PARCIAL</div>
+        <div class="d">Recibe el saldo/excedente de VARIOS camiones distintos, uno detras de otro (solo un parcial abierto a la vez). Si lo dejas sin marcar, es un contenedor ENTERO: recibe un solo camion, en una sola descarga.</div></div>
+      </label>
+      <div class="field"><label>Orden de uso (opcional)</label><input id="in-orden" type="number" inputmode="numeric" placeholder="1, 2, 3..."></div>
+      <div class="footnote" style="margin-top:-6px">Para un ENTERO: en que turno de llegada se usa (1ro, 2do...). Para un PARCIAL: cual se llena primero. Si lo dejas vacio, se usa el orden en que los agregaste.</div>
+      <label class="radio-opt">
+        <input type="checkbox" id="in-cerrado">
+        <div><div class="t">Contenedor cerrado</div>
+        <div class="d">Ya no debe recibir mas carga. El sistema recalcula automaticamente entre los que sigan abiertos, sin pasarse del payload de ninguno.</div></div>
+      </label>
+      <div class="row2">
+        <button class="btn-primary" id="btn-guardar-contenedor" onclick="guardarContenedor()">Agregar contenedor</button>
+        <button class="btn-ghost" id="btn-cancelar-contenedor" style="display:none" onclick="cancelarEdicionContenedor()">Cancelar edicion</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Contenedores ingresados</h2>
+      <div id="lista-contenedores"></div>
+    </div>
+  </section>
+
+  <!-- ===================== REPARTO ===================== -->
+  <section id="view-reparto">
+    <div class="field">
+      <input id="in-buscar-reparto" placeholder="Buscar por placa..." oninput="renderReparto()" autocapitalize="characters">
+    </div>
+    <div id="reparto-banner"></div>
+    <div class="footnote" style="margin-bottom:10px">Ordenado por orden de llegada real de los camiones (no por como los escribiste en la lista).</div>
+    <div id="lista-reparto"></div>
+  </section>
+
+  <!-- ===================== RESUMEN ===================== -->
+  <section id="view-resumen">
+    <div class="card">
+      <h2>Exportar arrastre</h2>
+      <div class="row2">
+        <button class="btn-export xls" onclick="exportExcel()">Excel (.xlsx)</button>
+        <button class="btn-export pdf" onclick="exportPDF()">PDF</button>
+      </div>
+      <div class="footnote">Genera el archivo con los camiones, contenedores, el detalle del reparto y el resumen de este lote, listo para enviar o imprimir.</div>
+    </div>
+    <div class="card">
+      <h2>Resumen por contenedor - peso bascula COSCO</h2>
+      <div id="resumen-banner"></div>
+      <div id="tabla-resumen"></div>
+      <div class="footnote">Payload y Tara son los que definiste en "Contenedores". El peso COSCO acumulado solo suma lo que hayas registrado en la pestana Reparto, lo que aun no se pesa no cuenta.</div>
+    </div>
+    <div class="card">
+      <button class="btn-danger-ghost" style="width:100%" onclick="vaciarLote()">Vaciar camiones y contenedores de este lote</button>
+    </div>
+  </section>
+
+</main>
+
+<nav class="tabs">
+  <button class="tab-btn active" data-view="camiones" onclick="showView('camiones')"><span class="ico">&#128666;</span>Camiones</button>
+  <button class="tab-btn" data-view="contenedores" onclick="showView('contenedores')"><span class="ico">&#128230;</span>Contenedores</button>
+  <button class="tab-btn" data-view="reparto" onclick="showView('reparto')"><span class="ico">&#9878;</span>Reparto</button>
+  <button class="tab-btn" data-view="resumen" onclick="showView('resumen')"><span class="ico">&#128203;</span>Resumen</button>
+</nav>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf@4.2.1/dist/jspdf.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@5.0.8/dist/jspdf.plugin.autotable.min.js"></script>
+<script>
+const STORE_KEY = "reparto_lotes_v1";
+const OLD_STORE_KEY = "reparto_contenedores_v1";
+
+let app = { lotes:{}, activo:null };
+
+function currentLote(){ return app.activo ? app.lotes[app.activo] : null; }
+
+function loadApp(){
+  try{
+    const raw = localStorage.getItem(STORE_KEY);
+    if(raw){ app = JSON.parse(raw); return; }
+  }catch(e){ console.warn("No se pudo leer almacenamiento local", e); }
+  try{
+    const oldRaw = localStorage.getItem(OLD_STORE_KEY);
+    if(oldRaw){
+      const old = JSON.parse(oldRaw);
+      if(old && ((old.camiones&&old.camiones.length) || (old.contenedores&&old.contenedores.length))){
+        const id = "L"+Date.now();
+        app.lotes[id] = {
+          id, booking:"", cliente:"Lote migrado", creado:new Date().toISOString(),
+          camiones: old.camiones||[], contenedores: old.contenedores||[], cosco: old.cosco||{}
+        };
+      }
+    }
+  }catch(e){ console.warn(e); }
+}
+function saveApp(){
+  try{ localStorage.setItem(STORE_KEY, JSON.stringify(app)); }
+  catch(e){ console.warn("No se pudo guardar", e); }
+}
+
+function fmt(n){
+  if(n===null||n===undefined||isNaN(n)) return "-";
+  return Math.round(n).toLocaleString("es-PE");
+}
+
+// ---------------------------------------------------------------
+// Selector de lotes
+// ---------------------------------------------------------------
+function renderSelectorLotes(){
+  const box = document.getElementById("lista-lotes");
+  const ids = Object.keys(app.lotes);
+  if(ids.length===0){
+    box.innerHTML = '<div class="empty">Aun no tienes lotes. Crea el primero abajo.</div>';
+    return;
+  }
+  ids.sort((a,b)=> (app.lotes[b].creado||"").localeCompare(app.lotes[a].creado||""));
+  box.innerHTML = ids.map(id=>{
+    const l = app.lotes[id];
+    return '<div class="lote-card">'
+      + '<div class="info">'
+      + '<div class="booking">' + (l.booking || "(sin booking)") + '</div>'
+      + '<div class="cliente">' + (l.cliente || "") + '</div>'
+      + '<div class="meta">' + (l.camiones||[]).length + ' camiones - ' + (l.contenedores||[]).length + ' contenedores'
+      + ' <button class="btn-danger-ghost" style="margin-left:8px" onclick="eliminarLote(\'' + id + '\')">Eliminar</button>'
+      + '</div></div>'
+      + '<button class="abrir" onclick="abrirLote(\'' + id + '\')">Abrir</button>'
+      + '</div>';
+  }).join("");
+}
+
+function crearLote(){
+  const booking = document.getElementById("in-booking").value.trim();
+  const cliente = document.getElementById("in-cliente").value.trim();
+  if(!booking || !cliente){ alert("Completa el booking y el cliente."); return; }
+  const id = "L"+Date.now();
+  app.lotes[id] = {
+    id, booking, cliente,
+    creado: new Date().toISOString(),
+    modo: "pegado", margenSeguridad: 500,
+    camiones: [], contenedores: [], cosco: {}
+  };
+  app.activo = id;
+  saveApp();
+  document.getElementById("in-booking").value = "";
+  document.getElementById("in-cliente").value = "";
+  mostrarPantalla();
+}
+function abrirLote(id){
+  app.activo = id;
+  saveApp();
+  mostrarPantalla();
+}
+function eliminarLote(id){
+  const l = app.lotes[id];
+  if(!confirm('Eliminar el lote "' + (l.booking||'') + ' - ' + (l.cliente||'') + '" y todos sus datos? No se puede deshacer.')) return;
+  delete app.lotes[id];
+  if(app.activo===id) app.activo=null;
+  saveApp();
+  renderSelectorLotes();
+}
+function cambiarLote(){
+  app.activo = null;
+  saveApp();
+  mostrarPantalla();
+}
+function mostrarPantalla(){
+  editandoCamionIdx = null;
+  editandoContenedorIdx = null;
+  if(currentLote()){
+    document.getElementById("pantalla-lotes").style.display = "none";
+    document.getElementById("pantalla-app").style.display = "block";
+    const l = currentLote();
+    if(l.modo===undefined) l.modo = "pegado";
+    if(l.margenSeguridad===undefined) l.margenSeguridad = 500;
+    document.getElementById("hdr-lote-info").textContent = (l.booking||"(sin booking)") + " - " + (l.cliente||"");
+    document.getElementById("in-margen").value = l.margenSeguridad;
+    renderModoUI();
+    actualizarFormCamionUI();
+    actualizarFormContenedorUI();
+    renderCamiones();
+    renderContenedores();
+    showView("camiones");
+  }else{
+    document.getElementById("pantalla-app").style.display = "none";
+    document.getElementById("pantalla-lotes").style.display = "block";
+    renderSelectorLotes();
+  }
+}
+function setModo(modo){
+  currentLote().modo = modo;
+  saveApp();
+  renderModoUI();
+  renderContenedores();
+}
+function setMargen(val){
+  const m = parseFloat(val);
+  currentLote().margenSeguridad = isNaN(m)? 0 : m;
+  saveApp();
+  renderContenedores();
+}
+function renderModoUI(){
+  const modo = currentLote().modo || "pegado";
+  document.getElementById("btn-modo-pegado").classList.toggle("active", modo==="pegado");
+  document.getElementById("btn-modo-pareja").classList.toggle("active", modo==="pareja");
+  document.getElementById("btn-modo-pegado-hdr").classList.toggle("active", modo==="pegado");
+  document.getElementById("btn-modo-pareja-hdr").classList.toggle("active", modo==="pareja");
+  document.getElementById("modo-explica").textContent = modo==="pareja"
+    ? "Distribucion pareja: el peso pendiente se reparte lo mas parejo posible entre TODOS los contenedores abiertos (enteros y parciales), cerrando primero cualquiera que ya este en curso antes de abrir uno nuevo."
+    : "Pegado al payload: cada camion llena su propio contenedor ENTERO (hasta el margen de seguridad); el excedente va rotando por los contenedores PARCIAL, uno abierto a la vez.";
+}
+
+function showView(name){
+  document.querySelectorAll("section").forEach(function(s){ s.classList.remove("active"); });
+  document.getElementById("view-"+name).classList.add("active");
+  document.querySelectorAll(".tab-btn").forEach(function(b){ b.classList.toggle("active", b.dataset.view===name); });
+  if(name==="reparto") renderReparto();
+  if(name==="resumen") renderResumen();
+}
+
+// ---------------------------------------------------------------
+// Camiones
+// ---------------------------------------------------------------
+let editandoCamionIdx = null;
+let editandoContenedorIdx = null;
+
+function guardarCamion(){
+  const placa = document.getElementById("in-placa").value.trim();
+  const tracto = document.getElementById("in-tracto").value.trim();
+  const bultos = parseFloat(document.getElementById("in-bultos").value);
+  const peso = parseFloat(document.getElementById("in-peso").value);
+  const ordenRaw = document.getElementById("in-orden-llegada").value;
+  const ordenLlegada = ordenRaw===""? null : parseFloat(ordenRaw);
+  if(!placa || !bultos || !peso){ alert("Completa placa, bultos y peso neto segun guia."); return; }
+  const lote = currentLote();
+  if(editandoCamionIdx!==null){
+    const c = lote.camiones[editandoCamionIdx];
+    c.placa = placa; c.tracto = tracto; c.bultos = bultos; c.peso = peso; c.ordenLlegada = ordenLlegada;
+    editandoCamionIdx = null;
+  }else{
+    lote.camiones.push({placa:placa, tracto:tracto, bultos:bultos, peso:peso, ordenLlegada:ordenLlegada});
+  }
+  saveApp();
+  ["in-placa","in-tracto","in-bultos","in-peso","in-orden-llegada"].forEach(function(id){ document.getElementById(id).value=""; });
+  actualizarFormCamionUI();
+  renderCamiones();
+}
+function editarCamion(i){
+  const c = currentLote().camiones[i];
+  document.getElementById("in-placa").value = c.placa;
+  document.getElementById("in-tracto").value = c.tracto||"";
+  document.getElementById("in-bultos").value = c.bultos;
+  document.getElementById("in-peso").value = c.peso;
+  document.getElementById("in-orden-llegada").value = (c.ordenLlegada===null||c.ordenLlegada===undefined)? "" : c.ordenLlegada;
+  editandoCamionIdx = i;
+  actualizarFormCamionUI();
+  document.getElementById("in-placa").scrollIntoView({behavior:"smooth", block:"center"});
+}
+function cancelarEdicionCamion(){
+  editandoCamionIdx = null;
+  ["in-placa","in-tracto","in-bultos","in-peso","in-orden-llegada"].forEach(function(id){ document.getElementById(id).value=""; });
+  actualizarFormCamionUI();
+}
+function actualizarFormCamionUI(){
+  const editando = editandoCamionIdx!==null;
+  document.getElementById("titulo-form-camion").textContent = editando? "Editar camion" : "Agregar camion";
+  document.getElementById("btn-guardar-camion").textContent = editando? "Guardar cambios" : "Agregar camion";
+  document.getElementById("btn-cancelar-camion").style.display = editando? "block" : "none";
+}
+function agregarCamionesEnBloque(){
+  const raw = document.getElementById("in-bulk-camiones").value;
+  const lineas = raw.split("\n").map(function(l){ return l.trim(); }).filter(function(l){ return l.length>0; });
+  if(lineas.length===0){ alert("Escribe al menos una linea con los datos del camion."); return; }
+  const lote = currentLote();
+  let agregados = 0;
+  const errores = [];
+  lineas.forEach(function(linea, idx){
+    const partes = linea.split(",").map(function(p){ return p.trim(); });
+    const placa = partes[0] || "";
+    const tracto = partes[1] || "";
+    const bultos = parseFloat(partes[2]);
+    const peso = parseFloat(partes[3]);
+    const ordenLlegada = (partes[4]!==undefined && partes[4]!=="")? parseFloat(partes[4]) : null;
+    if(!placa || !bultos || !peso || isNaN(bultos) || isNaN(peso)){
+      errores.push("Linea " + (idx+1) + ": \"" + linea + "\" - faltan datos o formato invalido");
+      return;
+    }
+    lote.camiones.push({placa:placa, tracto:tracto, bultos:bultos, peso:peso, ordenLlegada:ordenLlegada});
+    agregados++;
+  });
+  saveApp();
+  document.getElementById("in-bulk-camiones").value = "";
+  let msg = "Se agregaron " + agregados + " camion(es).";
+  if(errores.length){ msg += " " + errores.length + " linea(s) con error:<br>" + errores.join("<br>"); }
+  document.getElementById("bulk-camiones-resultado").innerHTML = msg;
+  renderCamiones();
+}
+
+function delCamion(i){
+  if(!confirm("Quitar este camion del lote?")) return;
+  const lote = currentLote();
+  lote.camiones.splice(i,1);
+  const nuevo = {};
+  Object.keys(lote.cosco).forEach(function(k){
+    const parts = k.split("_").map(Number);
+    const ci = parts[0], cj = parts[1];
+    if(ci===i) return;
+    const newCi = ci>i? ci-1: ci;
+    nuevo[newCi+"_"+cj] = lote.cosco[k];
+  });
+  lote.cosco = nuevo;
+  if(editandoCamionIdx===i) cancelarEdicionCamion();
+  saveApp();
+  renderCamiones();
+}
+function renderCamiones(){
+  const lote = currentLote();
+  const box = document.getElementById("lista-camiones");
+  document.getElementById("totCamiones").textContent = lote.camiones.length;
+  document.getElementById("totBultos").textContent = fmt(lote.camiones.reduce(function(s,c){return s+c.bultos;},0));
+  document.getElementById("totPeso").textContent = fmt(lote.camiones.reduce(function(s,c){return s+c.peso;},0));
+  if(lote.camiones.length===0){
+    box.innerHTML = '<div class="empty">Sin camiones todavia. Agrega el primero arriba.</div>';
+    return;
+  }
+  box.innerHTML = lote.camiones.map(function(c,i){
+    const prom = c.bultos? (c.peso/c.bultos) : 0;
+    const llegadaPill = (c.ordenLlegada!=null && c.ordenLlegada!=="")
+      ? ' <span class="pill blue">llegada #' + c.ordenLlegada + '</span>' : '';
+    return '<div class="list-item">'
+      + '<div class="main">'
+      + '<div class="l1">' + c.placa + (c.tracto? " - "+c.tracto:"") + llegadaPill + '</div>'
+      + '<div class="l2">' + c.bultos + ' bultos - ' + fmt(c.peso) + ' kg guia - ' + fmt(prom) + ' kg/bulto</div>'
+      + '</div>'
+      + '<div style="display:flex;gap:6px">'
+      + '<button class="btn-ghost" onclick="editarCamion('+i+')">Editar</button>'
+      + '<button class="btn-danger-ghost" onclick="delCamion('+i+')">Quitar</button>'
+      + '</div></div>';
+  }).join("");
+}
+
+// ---------------------------------------------------------------
+// Contenedores
+// ---------------------------------------------------------------
+function guardarContenedor(){
+  const codigo = document.getElementById("in-codigo").value.trim();
+  const tara = parseFloat(document.getElementById("in-tara").value) || 0;
+  const payload = parseFloat(document.getElementById("in-payload").value);
+  const parcial = document.getElementById("in-parcial").checked;
+  const ordenRaw = document.getElementById("in-orden").value;
+  const orden = ordenRaw===""? null : parseFloat(ordenRaw);
+  const cerrado = document.getElementById("in-cerrado").checked;
+  if(!codigo || !payload){ alert("Completa el codigo y el payload maximo."); return; }
+  const lote = currentLote();
+  if(editandoContenedorIdx!==null){
+    const c = lote.contenedores[editandoContenedorIdx];
+    c.codigo = codigo; c.tara = tara; c.payload = payload; c.parcial = parcial; c.orden = orden; c.cerrado = cerrado;
+    c.generado = false;
+    editandoContenedorIdx = null;
+  }else{
+    lote.contenedores.push({codigo:codigo, tara:tara, payload:payload, parcial:parcial, orden:orden, cerrado:cerrado, generado:false});
+  }
+  saveApp();
+  ["in-codigo","in-tara","in-payload","in-orden"].forEach(function(id){ document.getElementById(id).value=""; });
+  document.getElementById("in-parcial").checked = false;
+  document.getElementById("in-cerrado").checked = false;
+  actualizarFormContenedorUI();
+  renderContenedores();
+}
+function toggleCerrado(i){
+  const c = currentLote().contenedores[i];
+  c.cerrado = !c.cerrado;
+  saveApp();
+  renderContenedores();
+}
+function editarContenedor(i){
+  const c = currentLote().contenedores[i];
+  document.getElementById("in-codigo").value = c.codigo;
+  document.getElementById("in-tara").value = c.tara;
+  document.getElementById("in-payload").value = c.payload;
+  document.getElementById("in-parcial").checked = !!c.parcial;
+  document.getElementById("in-orden").value = (c.orden===null||c.orden===undefined)? "" : c.orden;
+  document.getElementById("in-cerrado").checked = !!c.cerrado;
+  editandoContenedorIdx = i;
+  actualizarFormContenedorUI();
+  document.getElementById("in-codigo").scrollIntoView({behavior:"smooth", block:"center"});
+}
+function cancelarEdicionContenedor(){
+  editandoContenedorIdx = null;
+  ["in-codigo","in-tara","in-payload","in-orden"].forEach(function(id){ document.getElementById(id).value=""; });
+  document.getElementById("in-parcial").checked = false;
+  document.getElementById("in-cerrado").checked = false;
+  actualizarFormContenedorUI();
+}
+function actualizarFormContenedorUI(){
+  const editando = editandoContenedorIdx!==null;
+  document.getElementById("titulo-form-contenedor").textContent = editando? "Editar contenedor" : "Agregar contenedor";
+  document.getElementById("btn-guardar-contenedor").textContent = editando? "Guardar cambios" : "Agregar contenedor";
+  document.getElementById("btn-cancelar-contenedor").style.display = editando? "block" : "none";
+}
+function agregarContenedoresEnBloque(){
+  const raw = document.getElementById("in-bulk-contenedores").value;
+  const lineas = raw.split("\n").map(function(l){ return l.trim(); }).filter(function(l){ return l.length>0; });
+  if(lineas.length===0){ alert("Escribe al menos una linea con los datos del contenedor."); return; }
+  const lote = currentLote();
+  let agregados = 0;
+  const errores = [];
+  lineas.forEach(function(linea, idx){
+    const partes = linea.split(",").map(function(p){ return p.trim(); });
+    const codigo = partes[0] || "";
+    const tara = parseFloat(partes[1]) || 0;
+    const payload = parseFloat(partes[2]);
+    if(!codigo || !payload || isNaN(payload)){
+      errores.push("Linea " + (idx+1) + ": \"" + linea + "\" - faltan datos o formato invalido");
+      return;
+    }
+    lote.contenedores.push({codigo:codigo, tara:tara, payload:payload, parcial:false, orden:null, cerrado:false});
+    agregados++;
+  });
+  saveApp();
+  document.getElementById("in-bulk-contenedores").value = "";
+  let msg = "Se agregaron " + agregados + " contenedor(es).";
+  if(errores.length){ msg += " " + errores.length + " linea(s) con error:<br>" + errores.join("<br>"); }
+  document.getElementById("bulk-contenedores-resultado").innerHTML = msg;
+  renderContenedores();
+}
+function delContenedor(i){
+  if(!confirm("Quitar este contenedor?")) return;
+  const lote = currentLote();
+  lote.contenedores.splice(i,1);
+  const nuevo = {};
+  Object.keys(lote.cosco).forEach(function(k){
+    const parts = k.split("_").map(Number);
+    const ci = parts[0], cj = parts[1];
+    if(cj===i) return;
+    const newCj = cj>i? cj-1: cj;
+    nuevo[ci+"_"+newCj] = lote.cosco[k];
+  });
+  lote.cosco = nuevo;
+  if(editandoContenedorIdx===i) cancelarEdicionContenedor();
+  saveApp();
+  renderContenedores();
+}
+function actualizarCalcRapido(){
+  const lote = currentLote();
+  if(!lote.calcRapido) lote.calcRapido = {};
+  lote.calcRapido.n = document.getElementById("in-calc-n").value;
+  lote.calcRapido.payloadTipico = document.getElementById("in-calc-payload").value;
+  saveApp();
+  renderCalcRapido();
+}
+function renderCalcRapido(){
+  const lote = currentLote();
+  const box = document.getElementById("calc-rapido-resultado");
+  const modo = lote.modo || "pegado";
+  document.getElementById("wrap-calc-payload").style.display = (modo==="pegado")? "block" : "none";
+
+  const n = parseFloat(document.getElementById("in-calc-n").value);
+  const totalPeso = lote.camiones.reduce(function(s,c){ return s+(c.peso||0); },0);
+
+  if(!n || n<=0){
+    box.innerHTML = '<div class="footnote">Escribe cuantos contenedores planeas usar para ver el estimado (con ' + fmt(totalPeso) + ' kg de camiones ingresados hasta ahora).</div>';
+    return;
+  }
+
+  if(modo==="pareja"){
+    const meta = totalPeso/n;
+    box.innerHTML = '<div class="l2" style="font-size:13px">Con <b>' + n + '</b> contenedores y ' + fmt(totalPeso) + ' kg de camiones ya ingresados, ese sera el peso de trabajo de TODOS los contenedores:</div>'
+      + '<div style="font-size:26px; font-weight:800; color:var(--amber); margin:4px 0">' + fmt(meta) + ' kg cada uno</div>'
+      + '<div class="footnote">Presiona "Generar estos contenedores" para crearlos ya con ese peso como payload de trabajo, y que el reparto real funcione con ellos. Cuando sepas los codigos reales, edita cada uno (boton "Editar" en la lista de abajo) para ponerselos.</div>';
+  }else{
+    const payload = parseFloat(document.getElementById("in-calc-payload").value);
+    const margen = lote.margenSeguridad||0;
+    if(!payload){
+      box.innerHTML = '<div class="footnote">Escribe tambien el payload tipico de cada contenedor para ver el estimado.</div>';
+      return;
+    }
+    const metaCada = Math.max(0, payload-margen);
+    const capacidadTotal = metaCada*n;
+    const diff = capacidadTotal-totalPeso;
+    box.innerHTML = '<div class="l2" style="font-size:13px">Cada contenedor de ~' + fmt(payload) + ' kg de payload recibiria hasta</div>'
+      + '<div style="font-size:26px; font-weight:800; color:var(--amber); margin:4px 0">' + fmt(metaCada) + ' kg</div>'
+      + '<div class="l2" style="font-size:13px">Con <b>' + n + '</b> contenedores asi, tendrias ' + fmt(capacidadTotal) + ' kg de capacidad contra ' + fmt(totalPeso) + ' kg de camiones — '
+      + (diff>=0
+          ? ('te sobrarian <b style="color:var(--green)">' + fmt(diff) + ' kg</b> de capacidad.')
+          : ('te faltarian <b style="color:var(--red)">' + fmt(-diff) + ' kg</b>; necesitarias unos <b>' + Math.ceil(totalPeso/metaCada) + '</b> contenedores en vez de ' + n + '.'))
+      + '</div>'
+      + '<div class="footnote">Presiona "Generar estos contenedores" para crearlos con el payload de ' + fmt(payload) + ' kg (trabajando pegado al payload con tu margen de seguridad); el reparto real usara ese peso, no el de reparto pareja.</div>';
+  }
+}
+
+function generarContenedores(){
+  const lote = currentLote();
+  const n = parseFloat(document.getElementById("in-calc-n").value);
+  if(!n || n<=0){ alert("Escribe cuantos contenedores vas a trabajar."); return; }
+  const modo = lote.modo || "pegado";
+  const totalPeso = lote.camiones.reduce(function(s,c){ return s+(c.peso||0); },0);
+
+  let payloadCada;
+  if(modo==="pareja"){
+    if(totalPeso<=0){ alert("Ingresa primero los camiones para poder calcular el peso pareja."); return; }
+    payloadCada = totalPeso/n;
+  }else{
+    const payloadTipico = parseFloat(document.getElementById("in-calc-payload").value);
+    if(!payloadTipico){ alert("Escribe el payload tipico de cada contenedor."); return; }
+    payloadCada = payloadTipico;
+  }
+
+  const hayGenerados = lote.contenedores.some(function(c){ return c.generado; });
+  if(hayGenerados && !confirm("Ya tienes contenedores generados automaticamente; se van a reemplazar por estos " + n + " nuevos (los contenedores reales que hayas agregado a mano NO se tocan). Continuar?")) return;
+
+  const oldToNew = {};
+  const nuevaLista = [];
+  lote.contenedores.forEach(function(c, oldIdx){
+    if(c.generado) return;
+    oldToNew[oldIdx] = nuevaLista.length;
+    nuevaLista.push(c);
+  });
+  const nuevoCosco = {};
+  Object.keys(lote.cosco).forEach(function(key){
+    const parts = key.split("_").map(Number);
+    const ci = parts[0], cj = parts[1];
+    if(oldToNew[cj]!==undefined){
+      nuevoCosco[ci+"_"+oldToNew[cj]] = lote.cosco[key];
+    }
+  });
+  lote.contenedores = nuevaLista;
+  lote.cosco = nuevoCosco;
+
+  for(let i=1; i<=n; i++){
+    lote.contenedores.push({
+      codigo: "Contenedor " + i + " (por definir)",
+      tara: 0,
+      payload: Math.round(payloadCada),
+      parcial: false, orden: null, cerrado: false, generado: true
+    });
+  }
+  if(editandoContenedorIdx!==null) cancelarEdicionContenedor();
+  saveApp();
+  renderContenedores();
+  alert("Se generaron " + n + " contenedores de " + fmt(payloadCada) + " kg de payload cada uno. Edita cada uno (boton \"Editar\") para ponerle su codigo real cuando lo sepas.");
+}
+
+function renderContenedores(){
+  const lote = currentLote();
+  const box = document.getElementById("lista-contenedores");
+  if(!lote.calcRapido) lote.calcRapido = {n:"", payloadTipico:""};
+  document.getElementById("in-calc-n").value = lote.calcRapido.n||"";
+  document.getElementById("in-calc-payload").value = lote.calcRapido.payloadTipico||"";
+  renderCalcRapido();
+  const targets = computeTargets();
+  const info = computeParcialesInfo();
+  const faltan = info.parcialesReales - info.marcados;
+  const avisoParciales = faltan > 0
+    ? '<div class="banner" style="margin-top:8px">Te faltan marcar <b>' + faltan + '</b> contenedor(es) mas como PARCIAL para cubrir lo que necesitas.</div>'
+    : (info.marcados > info.parcialesReales
+        ? '<div class="footnote" style="margin-top:8px">Tienes ' + (info.marcados - info.parcialesReales) + ' contenedor(es) PARCIAL marcados de mas — no es un problema, solo quedaran sin usarse.</div>'
+        : '<div class="footnote" style="margin-top:8px; color:var(--green)">Tienes exactamente los parciales que necesitas marcados.</div>');
+  document.getElementById("card-parciales-info").innerHTML =
+    '<h2>Contenedores parciales que necesitas</h2>'
+    + '<div style="display:flex; align-items:baseline; gap:10px; margin:2px 0 10px">'
+    + '<span style="font-size:34px; font-weight:800; color:var(--amber); line-height:1">' + info.parcialesReales + '</span>'
+    + '<span style="font-size:13px; color:var(--text-dim)">contenedor(es) PARCIAL necesarios, de ' + info.activos + ' activos<br>('
+    + '<b style="color:var(--green)">' + info.abiertos + ' abiertos</b> / <b style="color:var(--red)">' + info.cerrados + ' cerrados</b>)</span>'
+    + '</div>'
+    + '<div class="l2" style="font-size:13px">Ya marcaste como PARCIAL: <b style="color:var(--amber)">' + info.marcados + '</b></div>'
+    + avisoParciales
+    + '<div class="footnote">Un contenedor ENTERO recibe un solo camion, en una sola descarga. Un PARCIAL recibe el excedente de varios camiones distintos, uno detras de otro (solo uno abierto a la vez). Este numero se recalcula solo con lo que ya ingresaste.</div>';
+  if(lote.contenedores.length===0){
+    box.innerHTML = '<div class="empty">Sin contenedores todavia. Agrega el primero arriba.</div>';
+    return;
+  }
+  box.innerHTML = lote.contenedores.map(function(c,i){
+    const tgt = targets[i]||0;
+    const estadoPill = c.cerrado
+      ? '<span class="pill warn">CERRADO</span>'
+      : '<span class="pill ok">ABIERTO</span>';
+    const numTxt = (c.orden!=null && c.orden!=="")? (' ' + c.orden) : '';
+    const generadoPill = c.generado? ' <span class="pill amber">GENERADO</span>' : '';
+    const badge = c.parcial
+      ? '<div class="badge-grande parcial"><span class="ico">\ud83d\udd36</span>PARCIAL' + numTxt + '</div>'
+      : '<div class="badge-grande entero"><span class="ico">\ud83d\udce6</span>ENTERO' + numTxt + '</div>';
+    return '<div class="list-item">'
+      + '<div class="main">'
+      + badge
+      + '<div class="l1">' + c.codigo + ' ' + estadoPill + generadoPill + '</div>'
+      + '<div class="l2">Tara ' + fmt(c.tara) + ' kg - Payload ' + fmt(c.payload) + ' kg - Meta ' + fmt(tgt) + ' kg</div>'
+      + '</div>'
+      + '<div style="display:flex;flex-direction:column;gap:5px;align-items:stretch">'
+      + '<button class="btn-ghost" onclick="toggleCerrado('+i+')">' + (c.cerrado? "Reabrir":"Cerrar") + '</button>'
+      + '<div style="display:flex;gap:5px">'
+      + '<button class="btn-ghost" onclick="editarContenedor('+i+')">Editar</button>'
+      + '<button class="btn-danger-ghost" onclick="delContenedor('+i+')">Quitar</button>'
+      + '</div></div></div>';
+  }).join("");
+}
+
+// ---------------------------------------------------------------
+// Ordenamientos compartidos
+// ---------------------------------------------------------------
+function ordenConFallback(lista, campo, offset){
+  return lista.slice().sort(function(a,b){
+    const va = (a[campo]!=null && a[campo]!=="" && !isNaN(a[campo]))? parseFloat(a[campo]) : (a._idx+offset);
+    const vb = (b[campo]!=null && b[campo]!=="" && !isNaN(b[campo]))? parseFloat(b[campo]) : (b._idx+offset);
+    return va-vb;
+  });
+}
+function getArrivalOrder(lote){
+  const conIdx = lote.camiones.map(function(c,idx){ return Object.assign({_idx:idx}, c); });
+  return ordenConFallback(conIdx, "ordenLlegada", 10000).map(function(c){ return c._idx; });
+}
+function getLlegadaRanks(lote){
+  const seq = getArrivalOrder(lote);
+  const r = {};
+  seq.forEach(function(idx,i){ r[idx] = i+1; });
+  return r;
+}
+function getOrderedContainers(lote, wantParcial){
+  const conIdx = lote.contenedores.map(function(c,idx){ return Object.assign({_idx:idx}, c); })
+    .filter(function(c){ return c.payload>0 && !c.cerrado && !!c.parcial===wantParcial; });
+  return ordenConFallback(conIdx, "orden", 10000).map(function(c){ return c._idx; });
+}
+function getEnteroRanks(lote){
+  const seq = getOrderedContainers(lote, false);
+  const r = {}; seq.forEach(function(idx,i){ r[idx]=i+1; }); return r;
+}
+function getParcialRanks(lote){
+  const seq = getOrderedContainers(lote, true);
+  const r = {}; seq.forEach(function(idx,i){ r[idx]=i+1; }); return r;
+}
+
+// ---------------------------------------------------------------
+// Liquidado (peso COSCO ya confirmado) — no vuelve a repartirse
+// ---------------------------------------------------------------
+function computeSettled(lote){
+  const settledPerTruck = lote.camiones.map(function(){ return 0; });
+  const settledPerContainer = {};
+  lote.contenedores.forEach(function(c,idx){ settledPerContainer[idx] = 0; });
+  const settledSplitsPerTruck = lote.camiones.map(function(){ return []; });
+  Object.keys(lote.cosco).forEach(function(key){
+    const parts = key.split("_").map(Number);
+    const ci = parts[0], cj = parts[1];
+    const raw = lote.cosco[key];
+    if(raw===undefined || raw==="" || isNaN(raw)) return;
+    if(ci<0 || ci>=lote.camiones.length || cj<0 || cj>=lote.contenedores.length) return;
+    const peso = parseFloat(raw);
+    settledPerTruck[ci] += peso;
+    settledPerContainer[cj] = (settledPerContainer[cj]||0) + peso;
+    settledSplitsPerTruck[ci].push({contIdx:cj, peso:peso});
+  });
+  return {settledPerTruck:settledPerTruck, settledPerContainer:settledPerContainer, settledSplitsPerTruck:settledSplitsPerTruck};
+}
+
+// ---------------------------------------------------------------
+// Motor de reparto ENTERO + PARCIAL:
+//  - Cada camion (en su orden real de llegada) recibe UN contenedor
+//    ENTERO propio, que se llena con su carga hasta el payload de ese
+//    contenedor, en una sola descarga.
+//  - Si al camion le sobra peso, ese excedente va al contenedor PARCIAL
+//    que este abierto en ese momento (solo uno abierto a la vez: se
+//    llena por completo antes de pasar al siguiente parcial).
+//  - Lo que ya tiene peso COSCO confirmado queda fijo y no se recalcula.
+// ---------------------------------------------------------------
+function computeTargets(){
+  const lote = currentLote();
+  const settled = computeSettled(lote);
+  const margen = lote.margenSeguridad||0;
+  const modoPareja = (lote.modo||"pegado") === "pareja";
+  const targets = {};
+
+  if(modoPareja){
+    // Distribucion pareja: la meta de CADA contenedor abierto es el peso
+    // neto total de todos los camiones dividido entre la cantidad de
+    // contenedores abiertos (promedio simple), topado por su propio
+    // payload por seguridad fisica.
+    const abiertos = lote.contenedores.map(function(c,idx){ return idx; })
+      .filter(function(idx){ return lote.contenedores[idx].payload>0 && !lote.contenedores[idx].cerrado; });
+    const totalPeso = lote.camiones.reduce(function(s,c){ return s+(c.peso||0); },0);
+    const promedio = abiertos.length? (totalPeso/abiertos.length) : 0;
+    lote.contenedores.forEach(function(c,idx){
+      if(c.payload>0 && !c.cerrado){
+        targets[idx] = Math.max(settled.settledPerContainer[idx]||0, Math.min(c.payload, promedio));
+      }else{
+        targets[idx] = settled.settledPerContainer[idx]||0;
+      }
+    });
+  }else{
+    // Pegado al payload: la meta es el payload de cada contenedor, menos
+    // (o mas, si el margen es negativo) el margen de seguridad.
+    lote.contenedores.forEach(function(c,idx){
+      const cap = Math.max(0, c.payload - margen);
+      targets[idx] = (c.payload>0 && !c.cerrado)? cap : (settled.settledPerContainer[idx]||0);
+    });
+  }
+  return targets;
+}
+
+function computeDistribution(){
+  const lote = currentLote();
+  const settled = computeSettled(lote);
+  const targets = computeTargets();
+  const enteroSeq = getOrderedContainers(lote, false);
+  const parcialSeq = getOrderedContainers(lote, true);
+  const arrival = getArrivalOrder(lote);
+  const modoPareja = (lote.modo||"pegado") === "pareja";
+
+  const saldo = {};
+  lote.contenedores.forEach(function(c,idx){ saldo[idx] = settled.settledPerContainer[idx]||0; });
+
+  const perCamion = new Array(lote.camiones.length);
+
+  if(modoPareja){
+    // Distribucion pareja: se reparte el pendiente total lo mas parejo
+    // posible entre TODOS los contenedores abiertos (enteros y parciales
+    // por igual), cerrando primero cualquiera que ya este en curso antes
+    // de abrir uno nuevo, en el orden configurado.
+    const abiertos = enteroSeq.concat(parcialSeq);
+    const tocado = {};
+    arrival.forEach(function(camIdx){
+      const cam = lote.camiones[camIdx];
+      const pesoProm = cam.bultos? cam.peso/cam.bultos : 0;
+      const settledSplits = settled.settledSplitsPerTruck[camIdx];
+      let pending = Math.max(0, (cam.peso||0) - (settled.settledPerTruck[camIdx]||0));
+      const pendingSplits = [];
+      while(pending>0.01){
+        let best=null, bestRem=Infinity;
+        lote.contenedores.forEach(function(c,idx){
+          const tgt = targets[idx]||0;
+          if(tgt<=0) return;
+          if(tocado[idx] && saldo[idx]<tgt){
+            const rem = tgt-saldo[idx];
+            if(rem<bestRem){ bestRem=rem; best=idx; }
+          }
+        });
+        if(best===null){
+          for(let oi=0; oi<abiertos.length; oi++){
+            const idx = abiertos[oi];
+            const remcap = (targets[idx]||0)-saldo[idx];
+            if(remcap>0.01 && !tocado[idx]){ best=idx; break; }
+          }
+        }
+        if(best===null) break;
+        const cap = targets[best]-saldo[best];
+        const assign = Math.min(pending, cap);
+        pendingSplits.push({contIdx:best, peso:assign, tipo:(lote.contenedores[best].parcial?"parcial":"entero")});
+        saldo[best]+=assign; tocado[best]=true; pending-=assign;
+      }
+      const sobrante = pending>0.01? pending:0;
+      const splits = settledSplits.map(function(s){
+        const info = lote.contenedores[s.contIdx];
+        return {contIdx:s.contIdx, peso:s.peso, settled:true, tipo:(info&&info.parcial)?"parcial":"entero"};
+      }).concat(pendingSplits.map(function(s){ return {contIdx:s.contIdx, peso:s.peso, settled:false, tipo:s.tipo}; }));
+      let bultosUsados = 0;
+      splits.forEach(function(s,i){
+        if(i===splits.length-1){ s.bultos = Math.max(0, (cam.bultos||0)-bultosUsados); }
+        else{ s.bultos = pesoProm? Math.round(s.peso/pesoProm):0; bultosUsados+=s.bultos; }
+        s.pesoEstimado = s.peso;
+      });
+      perCamion[camIdx] = {splits:splits, sobrante:sobrante, pesoProm:pesoProm, arrivalRank:(arrival.indexOf(camIdx)+1)};
+    });
+    return {targets:targets, perCamion:perCamion};
+  }
+
+  let parcialPtr = 0;
+  while(parcialPtr<parcialSeq.length && (targets[parcialSeq[parcialPtr]] - saldo[parcialSeq[parcialPtr]]) <= 0.01) parcialPtr++;
+  // Puntero de enteros: salta cualquiera que YA tenga algo liquidado (sea de
+  // quien sea), para que un reordenamiento de llegada nunca choque con un
+  // entero que ya fue confirmado por otro camion.
+  let enteroCursor = 0;
+  function siguienteEnteroLibre(){
+    while(enteroCursor<enteroSeq.length && (settled.settledPerContainer[enteroSeq[enteroCursor]]||0) > 0.01){
+      enteroCursor++;
+    }
+    if(enteroCursor>=enteroSeq.length) return null;
+    return enteroSeq[enteroCursor++];
+  }
+
+  arrival.forEach(function(camIdx, arrivalRank){
+    const cam = lote.camiones[camIdx];
+    const pesoProm = cam.bultos? cam.peso/cam.bultos : 0;
+    const settledSplits = settled.settledSplitsPerTruck[camIdx];
+    let pending = Math.max(0, (cam.peso||0) - (settled.settledPerTruck[camIdx]||0));
+    const pendingSplits = [];
+
+    // Si este camion YA tiene un entero liquidado (donde sea, aunque ese
+    // contenedor ya este cerrado), no le corresponde un entero nuevo: su
+    // turno ya se uso. Solo se le asigna un entero nuevo si aun no tenia.
+    const yaTieneEnteroSettled = settledSplits.some(function(s){
+      const info = lote.contenedores[s.contIdx];
+      return info && !info.parcial;
+    });
+    let enteroContIdx = null;
+    if(!yaTieneEnteroSettled){
+      enteroContIdx = siguienteEnteroLibre();
+    }
+
+    if(pending>0.01 && enteroContIdx!==null){
+      const cap = Math.max(0, targets[enteroContIdx] - saldo[enteroContIdx]);
+      const assign = Math.min(pending, cap);
+      if(assign>0.01){
+        pendingSplits.push({contIdx:enteroContIdx, peso:assign, tipo:"entero"});
+        saldo[enteroContIdx] += assign; pending -= assign;
+      }
+    }
+
+    while(pending>0.01 && parcialPtr<parcialSeq.length){
+      const contIdx = parcialSeq[parcialPtr];
+      const cap = targets[contIdx] - saldo[contIdx];
+      if(cap<=0.01){ parcialPtr++; continue; }
+      const assign = Math.min(pending, cap);
+      pendingSplits.push({contIdx:contIdx, peso:assign, tipo:"parcial"});
+      saldo[contIdx] += assign; pending -= assign;
+      if(targets[contIdx]-saldo[contIdx] <= 0.01) parcialPtr++;
+    }
+
+    const sobrante = pending>0.01? pending : 0;
+    const splits = settledSplits.map(function(s){
+      const info = lote.contenedores[s.contIdx];
+      return {contIdx:s.contIdx, peso:s.peso, settled:true, tipo:(info&&info.parcial)?"parcial":"entero"};
+    }).concat(pendingSplits.map(function(s){ return {contIdx:s.contIdx, peso:s.peso, settled:false, tipo:s.tipo}; }));
+
+    let bultosUsados = 0;
+    splits.forEach(function(s,i){
+      if(i===splits.length-1){ s.bultos = Math.max(0, (cam.bultos||0) - bultosUsados); }
+      else{ s.bultos = pesoProm? Math.round(s.peso/pesoProm) : 0; bultosUsados += s.bultos; }
+      s.pesoEstimado = s.peso;
+    });
+
+    perCamion[camIdx] = {splits:splits, sobrante:sobrante, pesoProm:pesoProm, arrivalRank:arrivalRank+1};
+  });
+
+  return {targets:targets, perCamion:perCamion};
+}
+
+function computeParcialesInfo(){
+  const lote = currentLote();
+  const dist = computeDistribution();
+  const usados = {};
+  dist.perCamion.forEach(function(info){
+    info.splits.forEach(function(s){ if(s.tipo==="parcial") usados[s.contIdx]=true; });
+  });
+  let activos = 0, abiertos = 0, cerrados = 0, marcados = 0;
+  lote.contenedores.forEach(function(c,idx){
+    if(c.payload>0) activos++;
+    if(c.payload>0 && !c.cerrado) abiertos++;
+    if(c.cerrado) cerrados++;
+    if(c.parcial) marcados++;
+  });
+  return {activos:activos, abiertos:abiertos, cerrados:cerrados, marcados:marcados, parcialesReales:Object.keys(usados).length};
+}
+
+// ---------------------------------------------------------------
+// Vista Reparto
+// ---------------------------------------------------------------
+function renderReparto(){
+  const lote = currentLote();
+  const banner = document.getElementById("reparto-banner");
+  const box = document.getElementById("lista-reparto");
+  if(lote.camiones.length===0 || lote.contenedores.length===0){
+    banner.innerHTML = "";
+    box.innerHTML = '<div class="empty">Ingresa al menos un camion y un contenedor para calcular el reparto.</div>';
+    return;
+  }
+  const dist = computeDistribution();
+  const perCamion = dist.perCamion;
+  const targets = dist.targets;
+  const enteroRanks = getEnteroRanks(lote);
+  const parcialRanks = getParcialRanks(lote);
+  const arrival = getArrivalOrder(lote);
+  const haySobrante = perCamion.some(function(p){ return p.sobrante>0; });
+  banner.innerHTML = haySobrante
+    ? '<div class="banner">Hay peso sin asignar: no quedan contenedores enteros o parciales con espacio. Agrega otro contenedor.</div>'
+    : "";
+
+  // acumulado real (peso ya asignado, sumando todos los camiones) por contenedor,
+  // para poder mostrar "de cuanto va" cada uno junto a su meta actual
+  const acumPorContenedor = {};
+  lote.contenedores.forEach(function(c,idx){ acumPorContenedor[idx] = 0; });
+  perCamion.forEach(function(info){
+    info.splits.forEach(function(s){ acumPorContenedor[s.contIdx] = (acumPorContenedor[s.contIdx]||0) + s.peso; });
+  });
+
+  const buscarEl = document.getElementById("in-buscar-reparto");
+  const buscar = (buscarEl? buscarEl.value : "").trim().toLowerCase();
+  const arrivalFiltrado = buscar
+    ? arrival.filter(function(camIdx){ return (lote.camiones[camIdx].placa||"").toLowerCase().indexOf(buscar)>=0; })
+    : arrival;
+
+  if(buscar && arrivalFiltrado.length===0){
+    box.innerHTML = '<div class="empty">Ningun camion con placa que contenga "' + buscar + '".</div>';
+    return;
+  }
+
+  box.innerHTML = arrivalFiltrado.map(function(camIdx){
+    const cam = lote.camiones[camIdx];
+    const info = perCamion[camIdx];
+    const splitsHtml = info.splits.map(function(s){
+      const cont = lote.contenedores[s.contIdx];
+      const key = camIdx+"_"+s.contIdx;
+      const coscoVal = lote.cosco[key];
+      const diff = (!s.settled && coscoVal!==undefined && coscoVal!=="" && !isNaN(coscoVal))? (parseFloat(coscoVal) - s.pesoEstimado) : null;
+      const estadoPill = s.settled
+        ? '<span class="pill ok">confirmado</span>'
+        : '<span class="pill amber">pendiente</span>';
+      const numTxt = (cont && cont.orden!=null && cont.orden!=="")? (' '+cont.orden) : '';
+      const tipoTag = s.tipo==="parcial"
+        ? ('<span class="pill amber">PARCIAL' + numTxt + '</span>')
+        : ('<span class="pill blue">ENTERO' + numTxt + '</span>');
+      const metaCont = targets[s.contIdx]||0;
+      const acumCont = acumPorContenedor[s.contIdx]||0;
+      return '<div class="split">'
+        + '<div class="head"><span class="cont">' + (cont? cont.codigo : "?") + '</span>' + tipoTag + ' ' + estadoPill + '<span class="bultos">' + s.bultos + ' bultos</span></div>'
+        + '<div class="vals">'
+        + '<div><span class="lab">' + (s.settled? "Peso confirmado":"Peso estimado") + '</span><br>' + fmt(s.pesoEstimado) + ' kg</div>'
+        + '<div><span class="lab">Peso COSCO real</span>'
+        + '<input type="number" inputmode="decimal" placeholder="kg bascula" value="' + (coscoVal!==undefined? coscoVal : "") + '" onchange="setCosco(' + camIdx + ',' + s.contIdx + ',this.value)"></div>'
+        + '</div>'
+        + '<div class="footnote" style="margin-top:6px">Meta de ' + (cont? cont.codigo : "?") + ': <b>' + fmt(metaCont) + ' kg</b> — lleva acumulado (todos los camiones): <b>' + fmt(acumCont) + ' kg</b></div>'
+        + (diff!==null? ('<div class="diff ' + (diff>=0?'pos':'neg') + '">Diferencia: ' + (diff>=0?"+":"") + fmt(diff) + ' kg</div>') : "")
+        + '</div>';
+    }).join("");
+    const sobranteHtml = info.sobrante>0
+      ? ('<div class="diff pos">Sin asignar: ' + fmt(info.sobrante) + ' kg</div>') : "";
+    return '<div class="card">'
+      + '<h2><span class="pill blue">llegada #' + info.arrivalRank + '</span> ' + cam.placa + (cam.tracto? " - "+cam.tracto:"") + ' - ' + cam.bultos + ' bultos - ' + fmt(cam.peso) + ' kg guia</h2>'
+      + splitsHtml + sobranteHtml
+      + '</div>';
+  }).join("");
+}
+
+function setCosco(camIdx, contIdx, val){
+  const lote = currentLote();
+  const key = camIdx+"_"+contIdx;
+  if(val===""){ delete lote.cosco[key]; }
+  else{ lote.cosco[key] = parseFloat(val); }
+  saveApp();
+  renderReparto();
+}
+
+// ---------------------------------------------------------------
+// Resumen por contenedor (solo pesos COSCO)
+// ---------------------------------------------------------------
+function computeResumenContenedores(){
+  const lote = currentLote();
+  const dist = computeDistribution();
+  const perCamion = dist.perCamion;
+  const coscoAcum = {};
+  const bultosAcum = {};
+  lote.contenedores.forEach(function(c,idx){ coscoAcum[idx]=0; bultosAcum[idx]=0; });
+  perCamion.forEach(function(info,camIdx){
+    info.splits.forEach(function(s){
+      bultosAcum[s.contIdx] = (bultosAcum[s.contIdx]||0) + (s.bultos||0);
+      const key = camIdx+"_"+s.contIdx;
+      const v = lote.cosco[key];
+      if(v!==undefined && v!=="" && !isNaN(v)) coscoAcum[s.contIdx] += parseFloat(v);
+    });
+  });
+  return lote.contenedores.map(function(c,idx){
+    const cosco = coscoAcum[idx];
+    const bruto = c.tara + cosco;
+    const disponible = c.payload - cosco;
+    const pct = c.payload? (cosco/c.payload*100) : 0;
+    let estadoClass = "estado-sin", estadoTxt = "sin usar";
+    if(c.payload>0){
+      if(disponible<0){ estadoClass="estado-lleno"; estadoTxt="EXCEDE PAYLOAD"; }
+      else if(cosco<=0){ estadoClass="estado-sin"; estadoTxt="sin pesar"; }
+      else if(disponible===0){ estadoClass="estado-lleno"; estadoTxt="lleno"; }
+      else{ estadoClass="estado-disp"; estadoTxt="disponible"; }
+    }
+    return {idx:idx, codigo:c.codigo, tara:c.tara, payload:c.payload, cerrado:!!c.cerrado, tipo:c.parcial?"parcial":"entero",
+      cosco:cosco, bultos:bultosAcum[idx]||0, bruto:bruto, disponible:disponible, pct:pct, estadoClass:estadoClass, estadoTxt:estadoTxt};
+  });
+}
+
+function computeExcesos(){
+  const lote = currentLote();
+  const filas = computeResumenContenedores();
+  const totalPeso = lote.camiones.reduce(function(s,c){ return s+(c.peso||0); },0);
+  const totalBultos = lote.camiones.reduce(function(s,c){ return s+(c.bultos||0); },0);
+  const avgPesoBulto = totalBultos? (totalPeso/totalBultos) : 0;
+  const excesos = [];
+  filas.forEach(function(f){
+    if(f.disponible < 0){
+      const exceso = -f.disponible;
+      let mejor = null;
+      filas.forEach(function(g){
+        if(g.idx===f.idx || g.cerrado || g.payload<=0) return;
+        if(mejor===null || g.disponible > mejor.disponible) mejor = g;
+      });
+      excesos.push({
+        codigo: f.codigo, exceso: exceso,
+        bultos: avgPesoBulto? Math.ceil(exceso/avgPesoBulto) : null,
+        destino: (mejor && mejor.disponible>0)? mejor : null
+      });
+    }
+  });
+  return excesos;
+}
+
+function renderResumen(){
+  const lote = currentLote();
+  const box = document.getElementById("tabla-resumen");
+  if(lote.contenedores.length===0){
+    box.innerHTML = '<div class="empty">Agrega contenedores para ver el resumen.</div>';
+    return;
+  }
+  const excesos = computeExcesos();
+  const bannerBox = document.getElementById("resumen-banner");
+  if(bannerBox){
+    bannerBox.innerHTML = excesos.map(function(e){
+      const bultosTxt = e.bultos!==null? (' (~' + e.bultos + ' bulto(s))') : '';
+      return e.destino
+        ? ('<div class="banner">\u26a0 ' + e.codigo + ' excede su payload por ' + fmt(e.exceso) + ' kg' + bultosTxt + '. Pasa ese exceso al contenedor <b>' + e.destino.codigo + '</b> (le quedan ' + fmt(e.destino.disponible) + ' kg disponibles).</div>')
+        : ('<div class="banner">\u26a0 ' + e.codigo + ' excede su payload por ' + fmt(e.exceso) + ' kg' + bultosTxt + '. No hay otro contenedor abierto con espacio — agrega uno nuevo.</div>');
+    }).join("");
+  }
+  const filas = computeResumenContenedores();
+  const rows = filas.map(function(f){
+    const tipoLbl = f.tipo==="parcial"? "PARCIAL":"ENTERO";
+    return '<tr>'
+      + '<td>' + f.codigo + ' <span class="pill ' + (f.tipo==="parcial"?"amber":"blue") + '" style="font-size:9px">' + tipoLbl + '</span></td>'
+      + '<td>' + fmt(f.tara) + '</td>'
+      + '<td>' + fmt(f.payload) + '</td>'
+      + '<td>' + f.bultos + '</td>'
+      + '<td>' + fmt(f.cosco) + '</td>'
+      + '<td>' + fmt(f.bruto) + '</td>'
+      + '<td>' + f.pct.toFixed(1) + '%</td>'
+      + '<td class="' + f.estadoClass + '">' + f.estadoTxt + '</td>'
+      + '</tr>';
+  }).join("");
+
+  box.innerHTML = '<div style="overflow-x:auto"><table><thead><tr>'
+    + '<th>Contenedor</th><th>Tara</th><th>Payload</th><th>Bultos</th><th>Peso COSCO acum.</th><th>Peso bruto est.</th><th>% llenado</th><th>Estado</th>'
+    + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+}
+
+// ---------------------------------------------------------------
+// Arrastre plano (una fila por descarga) para exportar
+// ---------------------------------------------------------------
+function buildArrastreRows(){
+  const lote = currentLote();
+  const dist = computeDistribution();
+  const perCamion = dist.perCamion;
+  const enteroRanks = getEnteroRanks(lote);
+  const parcialRanks = getParcialRanks(lote);
+  const arrival = getArrivalOrder(lote);
+  const rows = [];
+  arrival.forEach(function(camIdx){
+    const cam = lote.camiones[camIdx];
+    const info = perCamion[camIdx];
+    if(info.splits.length===0 && info.sobrante<=0){
+      rows.push([info.arrivalRank, cam.placa, cam.tracto||"", cam.bultos, Math.round(cam.peso), "-", "", "", "", ""]);
+      return;
+    }
+    info.splits.forEach(function(s){
+      const cont = lote.contenedores[s.contIdx];
+      const tipoTxt = s.tipo==="parcial"? ("PARCIAL "+(parcialRanks[s.contIdx]||"?")) : ("ENTERO "+(enteroRanks[s.contIdx]||"?"));
+      const key = camIdx+"_"+s.contIdx;
+      const v = lote.cosco[key];
+      const coscoVal = (v!==undefined && v!=="" && !isNaN(v))? parseFloat(v) : "";
+      const diff = coscoVal!==""? Math.round(coscoVal - s.pesoEstimado) : "";
+      rows.push([info.arrivalRank, cam.placa, cam.tracto||"", cam.bultos, Math.round(cam.peso),
+                 (cont? cont.codigo : "?") + " (" + tipoTxt + ")", s.bultos, Math.round(s.pesoEstimado), coscoVal, diff]);
+    });
+    if(info.sobrante>0){
+      rows.push([info.arrivalRank, cam.placa, cam.tracto||"", cam.bultos, Math.round(cam.peso),
+                 "SIN ASIGNAR", "", Math.round(info.sobrante), "", ""]);
+    }
+  });
+  return rows;
+}
+
+const ARRASTRE_HEADERS = ["Llegada","Placa","Tracto","Bultos Camion","Peso Guia Camion (kg)",
+  "Contenedor","Bultos","Peso Estimado (kg)","Peso COSCO (kg)","Diferencia (kg)"];
+const RESUMEN_HEADERS = ["Codigo","Tara (kg)","Payload (kg)","Bultos","Peso COSCO Acum. (kg)",
+  "Peso Bruto Estimado (kg)","% Llenado","Estado"];
+
+function hoyISO(){ return new Date().toISOString().slice(0,10); }
+function slug(s){ return (s||"lote").toString().trim().replace(/[^a-zA-Z0-9-_]+/g,"_"); }
+
+function exportExcel(){
+  const lote = currentLote();
+  if(lote.camiones.length===0){ alert("Agrega al menos un camion antes de exportar."); return; }
+  if(typeof XLSX === "undefined"){
+    alert("No se pudo cargar el modulo de Excel. Verifica tu conexion a internet e intenta de nuevo.");
+    return;
+  }
+  const targets = computeTargets();
+  const enteroRanks = getEnteroRanks(lote);
+  const parcialRanks = getParcialRanks(lote);
+  const llegadaRanks = getLlegadaRanks(lote);
+  const wb = XLSX.utils.book_new();
+
+  const wsInfo = XLSX.utils.aoa_to_sheet([
+    ["Booking", lote.booking||""],
+    ["Cliente", lote.cliente||""],
+    ["Fecha de exportacion", new Date().toLocaleString("es-PE")]
+  ]);
+  XLSX.utils.book_append_sheet(wb, wsInfo, "Lote");
+
+  const wsCamiones = XLSX.utils.aoa_to_sheet([
+    ["Orden llegada","Placa","Tracto","Bultos","Peso Neto Guia (kg)","Peso Promedio/Bulto (kg)"]
+  ].concat(lote.camiones.map(function(c,i){
+    return [llegadaRanks[i], c.placa, c.tracto||"", c.bultos, c.peso, c.bultos? Math.round(c.peso/c.bultos*10)/10 : ""];
+  })));
+  XLSX.utils.book_append_sheet(wb, wsCamiones, "Camiones");
+
+  const wsCont = XLSX.utils.aoa_to_sheet([
+    ["Codigo","Tipo","Nº dentro de su tipo","Tara (kg)","Payload (kg)","Meta (kg)"]
+  ].concat(lote.contenedores.map(function(c,i){
+    const tipo = c.parcial? "PARCIAL":"ENTERO";
+    const numero = c.parcial? (parcialRanks[i]||"") : (enteroRanks[i]||"");
+    return [c.codigo, tipo, numero, c.tara, c.payload, Math.round(targets[i]||0)];
+  })));
+  XLSX.utils.book_append_sheet(wb, wsCont, "Contenedores");
+
+  const wsArr = XLSX.utils.aoa_to_sheet([ARRASTRE_HEADERS].concat(buildArrastreRows()));
+  XLSX.utils.book_append_sheet(wb, wsArr, "Arrastre");
+
+  const resumenRows = computeResumenContenedores().map(function(f){
+    return [f.codigo, f.tara, f.payload, f.bultos, Math.round(f.cosco), Math.round(f.bruto), Math.round(f.pct*10)/10 + "%", f.estadoTxt];
+  });
+  const wsRes = XLSX.utils.aoa_to_sheet([RESUMEN_HEADERS].concat(resumenRows));
+  XLSX.utils.book_append_sheet(wb, wsRes, "Resumen Contenedores");
+
+  XLSX.writeFile(wb, "arrastre_" + slug(lote.booking) + "_" + hoyISO() + ".xlsx");
+}
+
+function exportPDF(){
+  const lote = currentLote();
+  if(lote.camiones.length===0){ alert("Agrega al menos un camion antes de exportar."); return; }
+  if(typeof window.jspdf === "undefined"){
+    alert("No se pudo cargar el modulo de PDF. Verifica tu conexion a internet e intenta de nuevo.");
+    return;
+  }
+  const jsPDF = window.jspdf.jsPDF;
+  const doc = new jsPDF({orientation:"landscape", unit:"pt", format:"a4"});
+  const fecha = new Date().toLocaleDateString("es-PE");
+  const subt = "Booking: " + (lote.booking||"-") + "   |   Cliente: " + (lote.cliente||"-") + "   |   " + fecha;
+
+  doc.setFontSize(15);
+  doc.text("Arrastre de Camiones y Reparto de Contenedores", 40, 36);
+  doc.setFontSize(9);
+  doc.setTextColor(110);
+  doc.text(subt, 40, 52);
+  doc.setTextColor(0);
+
+  doc.autoTable({
+    startY: 64,
+    head: [ARRASTRE_HEADERS],
+    body: buildArrastreRows(),
+    styles:{fontSize:8, cellPadding:4},
+    headStyles:{fillColor:[27,37,48], textColor:255},
+    alternateRowStyles:{fillColor:[245,245,245]}
+  });
+
+  doc.addPage();
+  doc.setFontSize(15);
+  doc.text("Resumen por Contenedor", 40, 36);
+  doc.setFontSize(9);
+  doc.setTextColor(110);
+  doc.text(subt, 40, 52);
+  doc.setTextColor(0);
+
+  const resumenRows = computeResumenContenedores().map(function(f){
+    return [f.codigo, fmt(f.tara), fmt(f.payload), f.bultos, fmt(f.cosco), fmt(f.bruto), f.pct.toFixed(1)+"%", f.estadoTxt];
+  });
+  doc.autoTable({
+    startY: 64,
+    head: [RESUMEN_HEADERS],
+    body: resumenRows,
+    styles:{fontSize:9, cellPadding:5},
+    headStyles:{fillColor:[27,37,48], textColor:255},
+    alternateRowStyles:{fillColor:[245,245,245]}
+  });
+
+  doc.save("arrastre_" + slug(lote.booking) + "_" + hoyISO() + ".pdf");
+}
+
+function vaciarLote(){
+  if(!confirm("Esto borra los camiones, contenedores y pesos COSCO de este lote (se conserva el booking/cliente). Continuar?")) return;
+  const lote = currentLote();
+  lote.camiones = []; lote.contenedores = []; lote.cosco = {};
+  saveApp();
+  renderCamiones(); renderContenedores(); renderReparto(); renderResumen();
+}
+
+loadApp();
+mostrarPantalla();
+</script>
+</body>
+</html>
