@@ -271,6 +271,7 @@
 
     <div class="card">
       <h2>Camiones ingresados</h2>
+      <div class="field"><input id="in-buscar-camion" placeholder="Buscar por placa..." oninput="renderCamiones()" autocapitalize="characters"></div>
       <div id="lista-camiones"></div>
     </div>
   </section>
@@ -344,16 +345,6 @@
     </div>
   </section>
 
-  <!-- ===================== REPARTO ===================== -->
-  <section id="view-reparto">
-    <div class="field">
-      <input id="in-buscar-reparto" placeholder="Buscar por placa..." oninput="renderReparto()" autocapitalize="characters">
-    </div>
-    <div id="reparto-banner"></div>
-    <div class="footnote" style="margin-bottom:10px">Ordenado por orden de llegada real de los camiones (no por como los escribiste en la lista).</div>
-    <div id="lista-reparto"></div>
-  </section>
-
   <!-- ===================== RESUMEN ===================== -->
   <section id="view-resumen">
     <div class="card">
@@ -368,7 +359,7 @@
       <h2>Resumen por contenedor - peso bascula COSCO</h2>
       <div id="resumen-banner"></div>
       <div id="tabla-resumen"></div>
-      <div class="footnote">Payload y Tara son los que definiste en "Contenedores". El peso COSCO acumulado solo suma lo que hayas registrado en la pestana Reparto, lo que aun no se pesa no cuenta.</div>
+      <div class="footnote">Payload y Tara son los que definiste en "Contenedores". El peso COSCO acumulado solo suma lo que hayas registrado en la pestana Contenedores, lo que aun no se pesa no cuenta.</div>
     </div>
     <div class="card">
       <button class="btn-danger-ghost" style="width:100%" onclick="vaciarLote()">Vaciar camiones y contenedores de este lote</button>
@@ -380,7 +371,6 @@
 <nav class="tabs">
   <button class="tab-btn active" data-view="camiones" onclick="showView('camiones')"><span class="ico">&#128666;</span>Camiones</button>
   <button class="tab-btn" data-view="contenedores" onclick="showView('contenedores')"><span class="ico">&#128230;</span>Contenedores</button>
-  <button class="tab-btn" data-view="reparto" onclick="showView('reparto')"><span class="ico">&#9878;</span>Reparto</button>
   <button class="tab-btn" data-view="resumen" onclick="showView('resumen')"><span class="ico">&#128203;</span>Resumen</button>
 </nav>
 
@@ -460,7 +450,7 @@ function crearLote(){
     id, booking, cliente,
     creado: new Date().toISOString(),
     modo: "pegado", margenSeguridad: 500,
-    camiones: [], contenedores: [], cosco: {}
+    camiones: [], contenedores: [], cosco: {}, bultosReales: {}
   };
   app.activo = id;
   saveApp();
@@ -536,7 +526,8 @@ function showView(name){
   document.querySelectorAll("section").forEach(function(s){ s.classList.remove("active"); });
   document.getElementById("view-"+name).classList.add("active");
   document.querySelectorAll(".tab-btn").forEach(function(b){ b.classList.toggle("active", b.dataset.view===name); });
-  if(name==="reparto") renderReparto();
+  if(name==="camiones") renderCamiones();
+  if(name==="contenedores") renderContenedores();
   if(name==="resumen") renderResumen();
 }
 
@@ -645,16 +636,72 @@ function renderCamiones(){
     box.innerHTML = '<div class="empty">Sin camiones todavia. Agrega el primero arriba.</div>';
     return;
   }
-  box.innerHTML = lote.camiones.map(function(c,i){
+  if(!lote.bultosReales) lote.bultosReales = {};
+
+  const dist = (lote.contenedores.length>0)? computeDistribution() : null;
+  const enteroRanks = getEnteroRanks(lote);
+  const parcialRanks = getParcialRanks(lote);
+
+  const buscarEl = document.getElementById("in-buscar-camion");
+  const buscar = (buscarEl? buscarEl.value : "").trim().toLowerCase();
+
+  const indices = lote.camiones.map(function(c,i){ return i; })
+    .filter(function(i){ return !buscar || (lote.camiones[i].placa||"").toLowerCase().indexOf(buscar)>=0; });
+
+  if(buscar && indices.length===0){
+    box.innerHTML = '<div class="empty">Ningun camion con placa que contenga "' + buscar + '".</div>';
+    return;
+  }
+
+  box.innerHTML = indices.map(function(i){
+    const c = lote.camiones[i];
     const prom = c.bultos? (c.peso/c.bultos) : 0;
     const llegadaPill = (c.ordenLlegada!=null && c.ordenLlegada!=="")
       ? ' <span class="pill blue">llegada #' + c.ordenLlegada + '</span>' : '';
-    return '<div class="list-item">'
+
+    let descargaHtml = '<div class="footnote">Agrega contenedores para ver aqui su plan de descarga.</div>';
+    if(dist){
+      const info = dist.perCamion[i];
+      const filas = info.splits.map(function(s){
+        const cont = lote.contenedores[s.contIdx];
+        const tipoTag = s.tipo==="parcial"
+          ? ('PARCIAL' + ((parcialRanks[s.contIdx])? ' '+parcialRanks[s.contIdx]:''))
+          : ('ENTERO' + ((enteroRanks[s.contIdx])? ' '+enteroRanks[s.contIdx]:''));
+        const estado = s.settled? 'confirmado':'pendiente';
+        return '<div class="l2" style="margin-top:4px">&rarr; <b>' + (cont? cont.codigo:'?') + '</b> (' + tipoTag + ', ' + estado + '): '
+          + s.bultos + ' bultos, ' + fmt(s.pesoEstimado) + ' kg ' + (s.settled? 'confirmados':'estimados') + '</div>';
+      }).join("");
+      const pisoHtml = info.sobrante>0
+        ? ('<div class="l2" style="margin-top:4px; color:var(--red)">&rarr; <b>EN PISO</b> (sin contenedor asignado aun): ~' + fmt(info.sobrante) + ' kg estimados</div>')
+        : "";
+
+      // diferencia total, solo si ya no hay nada pendiente ni en piso
+      let diffHtml = "";
+      const todoSettled = info.sobrante<=0.01 && info.splits.length>0 && info.splits.every(function(s){ return s.settled; });
+      if(todoSettled){
+        const pesoRealTotal = info.splits.reduce(function(s,x){ return s+x.peso; },0);
+        const diffPeso = pesoRealTotal - c.peso;
+        const bultosRealesVals = info.splits.map(function(s){ return lote.bultosReales[i+"_"+s.contIdx]; });
+        const bultosCompletos = bultosRealesVals.every(function(v){ return v!==undefined && v!=="" && !isNaN(v); });
+        let bultosLine = "";
+        if(bultosCompletos){
+          const bultosRealTotal = bultosRealesVals.reduce(function(s,v){ return s+parseFloat(v); },0);
+          const diffBultos = bultosRealTotal - c.bultos;
+          bultosLine = ' | Bultos: ' + (diffBultos>=0?'+':'') + diffBultos;
+        }
+        diffHtml = '<div class="diff ' + (diffPeso>=0?'pos':'neg') + '" style="margin-top:6px">Diferencia final vs guia: '
+          + (diffPeso>=0?'+':'') + fmt(diffPeso) + ' kg' + bultosLine + '</div>';
+      }
+      descargaHtml = filas + pisoHtml + diffHtml;
+    }
+
+    return '<div class="list-item" style="align-items:flex-start">'
       + '<div class="main">'
       + '<div class="l1">' + c.placa + (c.tracto? " - "+c.tracto:"") + llegadaPill + '</div>'
       + '<div class="l2">' + c.bultos + ' bultos - ' + fmt(c.peso) + ' kg guia - ' + fmt(prom) + ' kg/bulto</div>'
+      + descargaHtml
       + '</div>'
-      + '<div style="display:flex;gap:6px">'
+      + '<div style="display:flex;gap:6px;flex-shrink:0">'
       + '<button class="btn-ghost" onclick="editarCamion('+i+')">Editar</button>'
       + '<button class="btn-danger-ghost" onclick="delCamion('+i+')">Quitar</button>'
       + '</div></div>';
@@ -892,6 +939,16 @@ function renderContenedores(){
     box.innerHTML = '<div class="empty">Sin contenedores todavia. Agrega el primero arriba.</div>';
     return;
   }
+  if(!lote.bultosReales) lote.bultosReales = {};
+
+  const dist = computeDistribution();
+  // indice inverso: contenedor -> lista de {camIdx, split}
+  const porContenedor = {};
+  lote.contenedores.forEach(function(c,idx){ porContenedor[idx] = []; });
+  dist.perCamion.forEach(function(info, camIdx){
+    info.splits.forEach(function(s){ porContenedor[s.contIdx].push({camIdx:camIdx, split:s}); });
+  });
+
   box.innerHTML = lote.contenedores.map(function(c,i){
     const tgt = targets[i]||0;
     const estadoPill = c.cerrado
@@ -902,13 +959,50 @@ function renderContenedores(){
     const badge = c.parcial
       ? '<div class="badge-grande parcial"><span class="ico">\ud83d\udd36</span>PARCIAL' + numTxt + '</div>'
       : '<div class="badge-grande entero"><span class="ico">\ud83d\udce6</span>ENTERO' + numTxt + '</div>';
-    return '<div class="list-item">'
+
+    const unidades = porContenedor[i] || [];
+    let unidadesHtml = '<div class="footnote">Ninguna unidad tiene planeado descargar aqui todavia.</div>';
+    if(unidades.length){
+      unidadesHtml = unidades.map(function(u){
+        const cam = lote.camiones[u.camIdx];
+        const s = u.split;
+        const key = u.camIdx + "_" + i;
+        const coscoVal = lote.cosco[key];
+        const bultosRealVal = lote.bultosReales[key];
+        const estadoPill2 = s.settled? '<span class="pill ok">confirmado</span>' : '<span class="pill amber">pendiente</span>';
+        const diffPeso = (s.settled && coscoVal!==undefined && coscoVal!=="" && !isNaN(coscoVal))
+          ? (parseFloat(coscoVal) - s.pesoEstimado) : null;
+        const diffBultos = (bultosRealVal!==undefined && bultosRealVal!=="" && !isNaN(bultosRealVal))
+          ? (parseFloat(bultosRealVal) - s.bultos) : null;
+        return '<div class="split">'
+          + '<div class="head"><span class="cont">' + cam.placa + (cam.tracto? ' - '+cam.tracto:'') + '</span>' + estadoPill2 + '</div>'
+          + '<div class="l2">Estimado: ' + s.bultos + ' bultos, ' + fmt(s.pesoEstimado) + ' kg</div>'
+          + '<div class="vals" style="margin-top:6px">'
+          + '<div><span class="lab">Peso COSCO real (kg)</span>'
+          + '<input type="number" inputmode="decimal" placeholder="kg bascula" value="' + (coscoVal!==undefined? coscoVal:'') + '" onchange="setCosco(' + u.camIdx + ',' + i + ',this.value)"></div>'
+          + '<div><span class="lab">Bultos reales</span>'
+          + '<input type="number" inputmode="numeric" placeholder="bultos" value="' + (bultosRealVal!==undefined? bultosRealVal:'') + '" onchange="setBultosReal(' + u.camIdx + ',' + i + ',this.value)"></div>'
+          + '</div>'
+          + ((diffPeso!==null || diffBultos!==null)
+              ? ('<div class="diff ' + ((diffPeso||0)>=0?'pos':'neg') + '" style="margin-top:6px">'
+                 + (diffPeso!==null? ('Dif. peso: ' + (diffPeso>=0?'+':'') + fmt(diffPeso) + ' kg'):'')
+                 + (diffPeso!==null && diffBultos!==null? ' | ':'')
+                 + (diffBultos!==null? ('Dif. bultos: ' + (diffBultos>=0?'+':'') + diffBultos):'')
+                 + '</div>')
+              : "")
+          + '</div>';
+      }).join("");
+    }
+
+    return '<div class="list-item" style="align-items:flex-start">'
       + '<div class="main">'
       + badge
       + '<div class="l1">' + c.codigo + ' ' + estadoPill + generadoPill + '</div>'
       + '<div class="l2">Tara ' + fmt(c.tara) + ' kg - Payload ' + fmt(c.payload) + ' kg - Meta ' + fmt(tgt) + ' kg</div>'
+      + '<div class="footnote" style="margin-top:8px; font-weight:600; color:var(--text-dim)">Unidades que descargan aqui:</div>'
+      + unidadesHtml
       + '</div>'
-      + '<div style="display:flex;flex-direction:column;gap:5px;align-items:stretch">'
+      + '<div style="display:flex;flex-direction:column;gap:5px;align-items:stretch;flex-shrink:0">'
       + '<button class="btn-ghost" onclick="toggleCerrado('+i+')">' + (c.cerrado? "Reabrir":"Cerrar") + '</button>'
       + '<div style="display:flex;gap:5px">'
       + '<button class="btn-ghost" onclick="editarContenedor('+i+')">Editar</button>'
@@ -1044,11 +1138,13 @@ function computeDistribution(){
       const settledSplits = settled.settledSplitsPerTruck[camIdx];
       let pending = Math.max(0, (cam.peso||0) - (settled.settledPerTruck[camIdx]||0));
       const pendingSplits = [];
+      const yaLiquidadoAqui = {};
+      settledSplits.forEach(function(s){ yaLiquidadoAqui[s.contIdx] = true; });
       while(pending>0.01){
         let best=null, bestRem=Infinity;
         lote.contenedores.forEach(function(c,idx){
           const tgt = targets[idx]||0;
-          if(tgt<=0) return;
+          if(tgt<=0 || yaLiquidadoAqui[idx]) return;
           if(tocado[idx] && saldo[idx]<tgt){
             const rem = tgt-saldo[idx];
             if(rem<bestRem){ bestRem=rem; best=idx; }
@@ -1057,6 +1153,7 @@ function computeDistribution(){
         if(best===null){
           for(let oi=0; oi<abiertos.length; oi++){
             const idx = abiertos[oi];
+            if(yaLiquidadoAqui[idx]) continue;
             const remcap = (targets[idx]||0)-saldo[idx];
             if(remcap>0.01 && !tocado[idx]){ best=idx; break; }
           }
@@ -1172,91 +1269,26 @@ function computeParcialesInfo(){
 }
 
 // ---------------------------------------------------------------
-// Vista Reparto
+// Entrada de peso COSCO y bultos reales (usado desde Camiones y Contenedores)
 // ---------------------------------------------------------------
-function renderReparto(){
-  const lote = currentLote();
-  const banner = document.getElementById("reparto-banner");
-  const box = document.getElementById("lista-reparto");
-  if(lote.camiones.length===0 || lote.contenedores.length===0){
-    banner.innerHTML = "";
-    box.innerHTML = '<div class="empty">Ingresa al menos un camion y un contenedor para calcular el reparto.</div>';
-    return;
-  }
-  const dist = computeDistribution();
-  const perCamion = dist.perCamion;
-  const targets = dist.targets;
-  const enteroRanks = getEnteroRanks(lote);
-  const parcialRanks = getParcialRanks(lote);
-  const arrival = getArrivalOrder(lote);
-  const haySobrante = perCamion.some(function(p){ return p.sobrante>0; });
-  banner.innerHTML = haySobrante
-    ? '<div class="banner">Hay peso sin asignar: no quedan contenedores enteros o parciales con espacio. Agrega otro contenedor.</div>'
-    : "";
-
-  // acumulado real (peso ya asignado, sumando todos los camiones) por contenedor,
-  // para poder mostrar "de cuanto va" cada uno junto a su meta actual
-  const acumPorContenedor = {};
-  lote.contenedores.forEach(function(c,idx){ acumPorContenedor[idx] = 0; });
-  perCamion.forEach(function(info){
-    info.splits.forEach(function(s){ acumPorContenedor[s.contIdx] = (acumPorContenedor[s.contIdx]||0) + s.peso; });
-  });
-
-  const buscarEl = document.getElementById("in-buscar-reparto");
-  const buscar = (buscarEl? buscarEl.value : "").trim().toLowerCase();
-  const arrivalFiltrado = buscar
-    ? arrival.filter(function(camIdx){ return (lote.camiones[camIdx].placa||"").toLowerCase().indexOf(buscar)>=0; })
-    : arrival;
-
-  if(buscar && arrivalFiltrado.length===0){
-    box.innerHTML = '<div class="empty">Ningun camion con placa que contenga "' + buscar + '".</div>';
-    return;
-  }
-
-  box.innerHTML = arrivalFiltrado.map(function(camIdx){
-    const cam = lote.camiones[camIdx];
-    const info = perCamion[camIdx];
-    const splitsHtml = info.splits.map(function(s){
-      const cont = lote.contenedores[s.contIdx];
-      const key = camIdx+"_"+s.contIdx;
-      const coscoVal = lote.cosco[key];
-      const diff = (!s.settled && coscoVal!==undefined && coscoVal!=="" && !isNaN(coscoVal))? (parseFloat(coscoVal) - s.pesoEstimado) : null;
-      const estadoPill = s.settled
-        ? '<span class="pill ok">confirmado</span>'
-        : '<span class="pill amber">pendiente</span>';
-      const numTxt = (cont && cont.orden!=null && cont.orden!=="")? (' '+cont.orden) : '';
-      const tipoTag = s.tipo==="parcial"
-        ? ('<span class="pill amber">PARCIAL' + numTxt + '</span>')
-        : ('<span class="pill blue">ENTERO' + numTxt + '</span>');
-      const metaCont = targets[s.contIdx]||0;
-      const acumCont = acumPorContenedor[s.contIdx]||0;
-      return '<div class="split">'
-        + '<div class="head"><span class="cont">' + (cont? cont.codigo : "?") + '</span>' + tipoTag + ' ' + estadoPill + '<span class="bultos">' + s.bultos + ' bultos</span></div>'
-        + '<div class="vals">'
-        + '<div><span class="lab">' + (s.settled? "Peso confirmado":"Peso estimado") + '</span><br>' + fmt(s.pesoEstimado) + ' kg</div>'
-        + '<div><span class="lab">Peso COSCO real</span>'
-        + '<input type="number" inputmode="decimal" placeholder="kg bascula" value="' + (coscoVal!==undefined? coscoVal : "") + '" onchange="setCosco(' + camIdx + ',' + s.contIdx + ',this.value)"></div>'
-        + '</div>'
-        + '<div class="footnote" style="margin-top:6px">Meta de ' + (cont? cont.codigo : "?") + ': <b>' + fmt(metaCont) + ' kg</b> — lleva acumulado (todos los camiones): <b>' + fmt(acumCont) + ' kg</b></div>'
-        + (diff!==null? ('<div class="diff ' + (diff>=0?'pos':'neg') + '">Diferencia: ' + (diff>=0?"+":"") + fmt(diff) + ' kg</div>') : "")
-        + '</div>';
-    }).join("");
-    const sobranteHtml = info.sobrante>0
-      ? ('<div class="diff pos">Sin asignar: ' + fmt(info.sobrante) + ' kg</div>') : "";
-    return '<div class="card">'
-      + '<h2><span class="pill blue">llegada #' + info.arrivalRank + '</span> ' + cam.placa + (cam.tracto? " - "+cam.tracto:"") + ' - ' + cam.bultos + ' bultos - ' + fmt(cam.peso) + ' kg guia</h2>'
-      + splitsHtml + sobranteHtml
-      + '</div>';
-  }).join("");
-}
-
 function setCosco(camIdx, contIdx, val){
   const lote = currentLote();
   const key = camIdx+"_"+contIdx;
   if(val===""){ delete lote.cosco[key]; }
   else{ lote.cosco[key] = parseFloat(val); }
   saveApp();
-  renderReparto();
+  renderContenedores();
+  renderCamiones();
+}
+function setBultosReal(camIdx, contIdx, val){
+  const lote = currentLote();
+  if(!lote.bultosReales) lote.bultosReales = {};
+  const key = camIdx+"_"+contIdx;
+  if(val===""){ delete lote.bultosReales[key]; }
+  else{ lote.bultosReales[key] = parseFloat(val); }
+  saveApp();
+  renderContenedores();
+  renderCamiones();
 }
 
 // ---------------------------------------------------------------
@@ -1371,7 +1403,7 @@ function buildArrastreRows(){
     const cam = lote.camiones[camIdx];
     const info = perCamion[camIdx];
     if(info.splits.length===0 && info.sobrante<=0){
-      rows.push([info.arrivalRank, cam.placa, cam.tracto||"", cam.bultos, Math.round(cam.peso), "-", "", "", "", ""]);
+      rows.push([info.arrivalRank, cam.placa, cam.tracto||"", cam.bultos, Math.round(cam.peso), "-", "", "", "", "", "", ""]);
       return;
     }
     info.splits.forEach(function(s){
@@ -1381,19 +1413,22 @@ function buildArrastreRows(){
       const v = lote.cosco[key];
       const coscoVal = (v!==undefined && v!=="" && !isNaN(v))? parseFloat(v) : "";
       const diff = coscoVal!==""? Math.round(coscoVal - s.pesoEstimado) : "";
+      const br = (lote.bultosReales||{})[key];
+      const bultosRealVal = (br!==undefined && br!=="" && !isNaN(br))? parseFloat(br) : "";
+      const diffBultos = bultosRealVal!==""? (bultosRealVal - s.bultos) : "";
       rows.push([info.arrivalRank, cam.placa, cam.tracto||"", cam.bultos, Math.round(cam.peso),
-                 (cont? cont.codigo : "?") + " (" + tipoTxt + ")", s.bultos, Math.round(s.pesoEstimado), coscoVal, diff]);
+                 (cont? cont.codigo : "?") + " (" + tipoTxt + ")", s.bultos, Math.round(s.pesoEstimado), coscoVal, diff, bultosRealVal, diffBultos]);
     });
     if(info.sobrante>0){
       rows.push([info.arrivalRank, cam.placa, cam.tracto||"", cam.bultos, Math.round(cam.peso),
-                 "SIN ASIGNAR", "", Math.round(info.sobrante), "", ""]);
+                 "EN PISO (sin contenedor)", "", Math.round(info.sobrante), "", "", "", ""]);
     }
   });
   return rows;
 }
 
 const ARRASTRE_HEADERS = ["Llegada","Placa","Tracto","Bultos Camion","Peso Guia Camion (kg)",
-  "Contenedor","Bultos","Peso Estimado (kg)","Peso COSCO (kg)","Diferencia (kg)"];
+  "Contenedor","Bultos Est.","Peso Estimado (kg)","Peso COSCO (kg)","Diferencia Peso (kg)","Bultos Reales","Diferencia Bultos"];
 const RESUMEN_HEADERS = ["Codigo","Tara (kg)","Payload (kg)","Bultos","Peso COSCO Acum. (kg)",
   "Peso Bruto Estimado (kg)","% Llenado","Estado"];
 
@@ -1502,9 +1537,9 @@ function exportPDF(){
 function vaciarLote(){
   if(!confirm("Esto borra los camiones, contenedores y pesos COSCO de este lote (se conserva el booking/cliente). Continuar?")) return;
   const lote = currentLote();
-  lote.camiones = []; lote.contenedores = []; lote.cosco = {};
+  lote.camiones = []; lote.contenedores = []; lote.cosco = {}; lote.bultosReales = {};
   saveApp();
-  renderCamiones(); renderContenedores(); renderReparto(); renderResumen();
+  renderCamiones(); renderContenedores(); renderResumen();
 }
 
 loadApp();
