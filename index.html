@@ -1258,40 +1258,55 @@ function renderContenedores(){
       : '<div class="badge-grande entero"><span class="ico">\ud83d\udce6</span>ENTERO' + numTxt + '</div>';
 
     const unidades = porContenedor[i] || [];
+    const estimadosC = lote.estimados || {};
     let unidadesHtml = '<div class="footnote">Ninguna unidad tiene planeado descargar aqui todavia.</div>';
     if(unidades.length){
-      unidadesHtml = unidades.map(function(u){
+      let totBultos = 0, totEst = 0, totCosco = 0;
+      const filasU = unidades.map(function(u){
         const cam = lote.camiones[u.camIdx];
+        const info = dist.perCamion[u.camIdx];
         const s = u.split;
         const key = u.camIdx + "_" + i;
         const coscoVal = lote.cosco[key];
-        const bultosRealVal = lote.bultosReales[key];
-        const estadoPill2 = s.settled? '<span class="pill ok">confirmado</span>' : '<span class="pill amber">pendiente</span>';
-        const diffPeso = (s.settled && coscoVal!==undefined && coscoVal!=="" && !isNaN(coscoVal))
-          ? (parseFloat(coscoVal) - s.pesoEstimado) : null;
-        const diffBultos = (bultosRealVal!==undefined && bultosRealVal!=="" && !isNaN(bultosRealVal))
-          ? (parseFloat(bultosRealVal) - s.bultos) : null;
-        return '<div class="split">'
-          + '<div class="head"><span class="cont">' + cam.placa + (cam.tracto? ' - '+cam.tracto:'') + '</span>' + estadoPill2 + '</div>'
-          + '<div class="l2">Estimado: ' + s.bultos + ' bultos, ' + fmt(s.pesoEstimado) + ' kg</div>'
-          + '<div class="vals" style="margin-top:6px">'
-          + '<div><span class="lab">Peso COSCO real (kg)</span>'
-          + '<input type="number" inputmode="decimal" placeholder="kg bascula" value="' + (coscoVal!==undefined? coscoVal:'') + '" onchange="setCosco(' + u.camIdx + ',' + i + ',this.value)"></div>'
-          + '<div><span class="lab">Bultos reales</span>'
-          + '<input type="number" inputmode="numeric" placeholder="bultos" value="' + (bultosRealVal!==undefined? bultosRealVal:'') + '" onchange="setBultosReal(' + u.camIdx + ',' + i + ',this.value)"></div>'
-          + '</div>'
-          + ((diffPeso!==null || diffBultos!==null)
-              ? ('<div class="diff ' + ((diffPeso||0)>=0?'pos':'neg') + '" style="margin-top:6px">'
-                 + (diffPeso!==null? ('Dif. peso: ' + (diffPeso>=0?'+':'') + fmt(diffPeso) + ' kg'):'')
-                 + (diffPeso!==null && diffBultos!==null? ' | ':'')
-                 + (diffBultos!==null? ('Dif. bultos: ' + (diffBultos>=0?'+':'') + diffBultos):'')
-                 + '</div>')
-              : "")
+        const brVal = lote.bultosReales[key];
+        const est = estimadosC[key];
+        const estPeso = s.settled? (est? est.peso : s.bultos*(info.pesoPromNom||0)) : s.pesoEstimado;
+        const estBultos = s.settled? (est? est.bultos : s.bultos) : s.bultos;
+        const tieneBajada = info.splits.some(function(x){ return x.settled; });
+        let difTxt = '&mdash;', difCls = '';
+        if(s.settled){
+          const dp = parseFloat(coscoVal) - estPeso;
+          const hayBR = (brVal!==undefined && brVal!=="" && !isNaN(brVal));
+          const db = hayBR? (parseFloat(brVal) - estBultos) : null;
+          difCls = dp>=0? 'pos' : 'neg';
+          difTxt = (dp>=0?'+':'') + fmt(dp) + (db!==null? ('<div class="sub">bultos ' + (db>=0?'+':'') + db + '</div>') : '');
+          totCosco += parseFloat(coscoVal);
+        }
+        totEst += estPeso;
+        totBultos += (brVal!==undefined && brVal!=="" && !isNaN(brVal))? parseFloat(brVal) : s.bultos;
+        const sub = (s.settled? 'confirmado' : 'pendiente')
+          + ((!s.settled && tieneBajada)? (' &middot; ~' + fmt(info.pesoProm) + ' kg/bulto') : '')
+          + (s.manual? ' &middot; anexado' : '');
+        return '<div class="lin">'
+          + '<div class="cc">' + cam.placa + '<div class="sub">' + sub + '</div></div>'
+          + '<div><input type="number" inputmode="numeric" placeholder="' + estBultos + '" value="' + (brVal!==undefined? brVal:'') + '" onchange="setBultosReal(' + u.camIdx + ',' + i + ',this.value)"></div>'
+          + '<div class="num">' + fmt(estPeso) + '</div>'
+          + '<div><input type="number" inputmode="decimal" placeholder="kg" value="' + (coscoVal!==undefined? coscoVal:'') + '" onchange="setCosco(' + u.camIdx + ',' + i + ',this.value)"></div>'
+          + '<div class="num ' + difCls + '">' + difTxt + '</div>'
           + '</div>';
       }).join("");
+      const cabU = '<div class="lin lin-h"><div>Placa</div><div>Bultos</div><div>Peso estim.</div><div>Peso COSCO</div><div>Dif. kg</div></div>';
+      const totU = '<div class="lin" style="font-weight:700"><div class="cc">Total</div><div class="num">' + totBultos + '</div><div class="num">' + fmt(totEst) + '</div><div class="num">' + (totCosco? fmt(totCosco) : '&mdash;') + '</div><div class="num">&nbsp;</div></div>';
+      unidadesHtml = cabU + filasU + totU;
     }
 
     const rs = sugPorIdx[i];
+    let faltaPill = '';
+    if(rs && c.payload>0 && !c.cerrado){
+      if(rs.completo) faltaPill = ' <span class="pill ok">Completo</span>';
+      else if(rs.gap<0) faltaPill = ' <span class="pill warn">Pasa meta +' + fmt(-rs.gap) + ' kg</span>';
+      else faltaPill = ' <span class="pill amber">Falta ' + fmt(rs.gap) + ' kg' + (rs.gapBultos!==null? (' (~' + rs.gapBultos + ' bultos)') : '') + '</span>';
+    }
     let resumenHtml = '';
     if(rs && c.payload>0){
       const estadoMeta = c.cerrado
@@ -1302,15 +1317,23 @@ function renderContenedores(){
                 ? '<span style="color:var(--red)">Pasa su meta por ' + fmt(-rs.gap) + ' kg</span>'
                 : 'Falta <b style="color:var(--amber)">' + fmt(rs.gap) + ' kg</b>' + (rs.gapBultos!==null? ' (~' + rs.gapBultos + ' bultos)' : '')));
       resumenHtml = '<div class="l2" style="margin-top:6px"><b>Lleva:</b> ' + fmt(rs.acum) + ' kg en ' + rs.bultos + ' bultos (confirmado ' + fmt(rs.confirmado) + ' + por bajar ' + fmt(rs.planeado) + ') &middot; <b>Meta:</b> ' + fmt(rs.meta) + ' kg &middot; ' + estadoMeta + '</div>';
-      if(rs.sugerencias.length){
-        resumenHtml += '<div class="footnote" style="margin-top:4px; font-weight:600; color:var(--text-dim)">Para completar, conviene bajar aqui:</div>'
-          + rs.sugerencias.map(function(sg){
-              return '<div class="l2">&#9656; <b>' + sg.placa + '</b>: ' + sg.bultos + ' bultos (~' + fmt(sg.peso) + ' kg) &rarr; quedaria en ' + fmt(sg.quedaria) + ' kg'
-                + (sg.faltaria>=1? (', faltarian ' + fmt(sg.faltaria) + ' kg') : '')
-                + (sg.yaBajo? ' [ya bajo su entero]' : '') + (sg.enPiso? ' [saldo en piso]' : '') + '</div>';
-            }).join("");
-      }else if(!c.cerrado && !rs.completo && rs.gap>=1){
-        resumenHtml += '<div class="footnote" style="margin-top:4px">Ninguna unidad con bultos por bajar encaja aqui todavia.</div>';
+      if(c.parcial){
+        if(rs.sugerencias.length){
+          resumenHtml += '<div class="footnote" style="margin-top:6px; font-weight:600; color:var(--text-dim)">Para completar este parcial, conviene bajar:</div>'
+            + rs.sugerencias.map(function(sg){
+                const base = (sg.yaBajo && sg.saldoKg>0)
+                  ? ('saldo real = guia ' + fmt(sg.guia) + ' &minus; COSCO ' + fmt(sg.kgBajados) + ' = ' + fmt(sg.saldoKg) + ' kg en ' + sg.bultosSaldo + ' bultos &rarr; <b>' + fmt(sg.pesoBulto) + ' kg c/u</b>')
+                  : ('aun sin primera bajada pesada: usa el promedio de su guia, <b>' + fmt(sg.pesoBulto) + ' kg c/u</b>');
+                const bajoPay = c.payload - sg.quedaria;
+                return '<div class="l2" style="margin-top:6px">&#9656; <b>' + sg.placa + '</b> (' + base + ')'
+                  + '<br>&nbsp;&nbsp;Bajar <b>' + sg.bultos + ' bultos</b> (' + fmt(sg.peso) + ' kg) &rarr; el parcial quedaria en <b>' + fmt(sg.quedaria) + ' kg</b>'
+                  + (sg.faltaria>=1? (' (faltarian ' + fmt(sg.faltaria) + ' kg para la meta)') : ' (meta cumplida)')
+                  + ' &middot; ' + (bajoPay>=0? (fmt(bajoPay) + ' kg por debajo del payload') : ('<span style="color:var(--red)">pasa el payload por ' + fmt(-bajoPay) + ' kg</span>'))
+                  + (sg.enPiso? ' [tiene saldo en piso]' : '') + '</div>';
+              }).join("");
+        }else if(!c.cerrado && !rs.completo && rs.gap>=1){
+          resumenHtml += '<div class="footnote" style="margin-top:6px">Ninguna unidad con bultos por bajar encaja aqui todavia.</div>';
+        }
       }
     }
     const exc = excesosPorIdx[i];
@@ -1330,7 +1353,7 @@ function renderContenedores(){
     return '<div class="list-item" style="align-items:flex-start">'
       + '<div class="main">'
       + badge
-      + '<div class="l1">' + c.codigo + ' ' + estadoPill + generadoPill + '</div>'
+      + '<div class="l1">' + c.codigo + ' ' + estadoPill + generadoPill + faltaPill + '</div>'
       + '<div class="l2">Tara ' + fmt(c.tara) + ' kg - Payload ' + fmt(c.payload) + ' kg - Meta ' + fmt(tgt) + ' kg</div>'
       + resumenHtml
       + excesoHtml
@@ -1752,11 +1775,14 @@ function computeSugerencias(dist){
         if(pendOtros<1) return;
         const k = Math.min(pendOtros, Math.floor(gap/info.pesoProm));
         if(k<1) return;
+        const kgBajados = info.splits.filter(function(s){ return s.settled; }).reduce(function(a,s){ return a+s.peso; },0);
         sug.push({
           camIdx:ci, placa:cam.placa, bultos:k, peso:k*info.pesoProm,
           quedaria: acum + k*info.pesoProm, faltaria: gap - k*info.pesoProm,
           yaBajo: info.splits.some(function(s){ return s.settled; }),
-          enPiso: (info.sobranteBultos||0)>0
+          enPiso: (info.sobranteBultos||0)>0,
+          pesoBulto: info.pesoProm, pesoBultoNom: info.pesoPromNom, saldoKg: info.saldoKg,
+          guia: cam.peso, kgBajados: kgBajados, bultosSaldo: pendOtros
         });
       });
       sug.sort(function(a,b){
@@ -1766,7 +1792,7 @@ function computeSugerencias(dist){
     }
     res[idx] = {acum:acum, confirmado:conf, planeado:acum-conf, bultos:bult, meta:(targets[idx]||0),
       gap:gap, gapBultos:(avgPesoBulto? Math.floor(Math.max(0,gap)/avgPesoBulto) : null),
-      completo:(abierto && gap<minBulto), sugerencias:sug.slice(0,3)};
+      completo:(abierto && gap>=0 && gap<minBulto), sugerencias:sug.slice(0,3)};
   });
   return res;
 }
