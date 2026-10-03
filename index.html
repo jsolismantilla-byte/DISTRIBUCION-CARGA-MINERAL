@@ -790,6 +790,7 @@ function remapTodo(lote, fCam, fCont){
   lote.cosco = remapClaves(lote.cosco, fCam, fCont);
   lote.bultosReales = remapClaves(lote.bultosReales, fCam, fCont);
   lote.estimados = remapClaves(lote.estimados, fCam, fCont);
+  lote.traslados = remapClaves(lote.traslados, fCam, fCont);
 }
 function delCamion(i){
   if(!confirm("Quitar este camion del lote?")) return;
@@ -869,7 +870,7 @@ function renderCamiones(){
           difTxt = '&mdash;' + (db!==0? ('<div class="sub">bultos ' + (db>=0?'+':'') + db + '</div>') : '');
         }
         return '<div class="lin">'
-          + '<div class="cc">' + (cont? cont.codigo:'?') + '<div class="sub">' + tipoTag + ' &middot; ' + (s.settled? 'confirmado' : (s.bajado? 'bajado, sin pesar' : 'pendiente')) + (s.manual? ' &middot; anexado':'') + '</div></div>'
+          + '<div class="cc">' + (cont? cont.codigo:'?') + '<div class="sub">' + tipoTag + ' &middot; ' + (s.settled? 'confirmado' : (s.bajado? 'bajado, sin pesar' : 'pendiente')) + (s.traslado? (' &middot; traslado <a href="#" onclick="quitarTraslado(' + i + ',' + s.contIdx + ');return false;" style="color:var(--amber)">quitar</a>') : (s.manual? ' &middot; anexado':'')) + '</div></div>'
           + '<div><input type="number" inputmode="numeric" placeholder="' + estBultos + '" value="' + (brVal!==undefined? brVal:'') + '" onchange="setBultosReal(' + i + ',' + s.contIdx + ',this.value)"></div>'
           + '<div class="num">' + fmt(estPeso) + '</div>'
           + '<div><input type="number" inputmode="decimal" placeholder="kg" value="' + (coscoVal!==undefined? coscoVal:'') + '" onchange="setCosco(' + i + ',' + s.contIdx + ',this.value)"></div>'
@@ -1174,6 +1175,7 @@ function generarContenedores(){
     });
   });
   lote.estimados = remapClaves(lote.estimados, function(x){ return x; }, function(x){ return oldToNew[x]!==undefined? oldToNew[x] : null; });
+  lote.traslados = remapClaves(lote.traslados, function(x){ return x; }, function(x){ return oldToNew[x]!==undefined? oldToNew[x] : null; });
   lote.contenedores = nuevaLista;
   lote.cosco = nuevoCosco;
   lote.bultosReales = nuevoBR;
@@ -1226,6 +1228,21 @@ function setAnexo(camIdx, slot, val){
   saveApp();
   renderCamiones();
   renderContenedores();
+}
+function aplicarTraslado(camIdx, contIdx, bultos){
+  const lote = currentLote();
+  if(!lote.traslados) lote.traslados = {};
+  lote.traslados[camIdx+"_"+contIdx] = bultos;
+  saveApp();
+  renderContenedores();
+  renderCamiones();
+}
+function quitarTraslado(camIdx, contIdx){
+  const lote = currentLote();
+  if(lote.traslados) delete lote.traslados[camIdx+"_"+contIdx];
+  saveApp();
+  renderContenedores();
+  renderCamiones();
 }
 function setCompleto(camIdx, v){
   currentLote().camiones[camIdx].completo = !!v;
@@ -1329,7 +1346,7 @@ function renderContenedores(){
         totBultos += ed.hayBR? ed.br : s.bultos;
         const sub = (s.settled? 'confirmado' : (s.bajado? 'bajado, sin pesar' : 'pendiente'))
           + ((!s.settled && tieneBajada)? (' &middot; ~' + fmt(info.pesoProm) + ' kg/bulto') : '')
-          + (s.manual? ' &middot; anexado' : '');
+          + (s.traslado? (' &middot; traslado <a href="#" onclick="quitarTraslado(' + u.camIdx + ',' + i + ');return false;" style="color:var(--amber)">quitar</a>') : (s.manual? ' &middot; anexado' : ''));
         return '<div class="lin">'
           + '<div class="cc">' + cam.placa + '<div class="sub">' + sub + '</div></div>'
           + '<div><input type="number" inputmode="numeric" placeholder="' + estBultos + '" value="' + (brVal!==undefined? brVal:'') + '" onchange="setBultosReal(' + u.camIdx + ',' + i + ',this.value)"></div>'
@@ -1377,6 +1394,26 @@ function renderContenedores(){
         }else if(!c.cerrado && !rs.completo && rs.gap>=1){
           resumenHtml += '<div class="footnote" style="margin-top:6px">Ninguna unidad con bultos por bajar encaja aqui todavia.</div>';
         }
+      }else if(rs.bajo){
+        const refTxt = (rs.promOtros!==null)? ('los demas enteros van en ~' + fmt(rs.promOtros) + ' kg') : 'no hay otros enteros para comparar';
+        resumenHtml += '<div class="banner" style="margin-top:8px">&#9888; ENTERO bajo: lleva <b>' + fmt(rs.acum) + ' kg</b> (meta ' + fmt(rs.meta) + ' kg; ' + refTxt + '). '
+          + (rs.sugEntero.length? 'Para levantarlo y dejarlo parejo con el resto, propongo bajarle saldo de:' : 'Ninguna unidad con saldo por bajar alcanza para levantarlo.') + '</div>';
+        resumenHtml += rs.sugEntero.map(function(sg){
+          const base = (sg.yaBajo && sg.saldoKg>0)
+            ? ('saldo real = guia ' + fmt(sg.guia) + ' &minus; ' + (sg.kgBajadoEst>0? 'bajado' : 'COSCO') + ' ' + fmt(sg.kgBajados) + ' = ' + fmt(sg.saldoKg) + ' kg en ' + sg.bultosSaldo + ' bultos &rarr; <b>' + fmt(sg.pesoBulto) + ' kg c/u</b>')
+            : ('promedio de su guia, <b>' + fmt(sg.pesoBulto) + ' kg c/u</b>');
+          const bp = c.payload - sg.quedaria;
+          const orig = sg.origen.map(function(o){
+            return (o.antes===null)
+              ? ('de lo que tiene EN PISO (' + o.quitar + ' bultos)')
+              : ('de su saldo en ' + o.codigo + ' (' + o.quitar + ' bultos; ese contenedor pasaria de ' + fmt(o.antes) + ' a ' + fmt(o.despues) + ' kg)');
+          }).join('; ');
+          return '<div class="l2" style="margin-top:6px">&#9656; <b>' + sg.placa + '</b> (' + base + ')'
+            + '<br>&nbsp;&nbsp;Bajar <b>' + sg.bultos + ' bultos</b> (' + fmt(sg.peso) + ' kg) aqui &rarr; quedaria en <b>' + fmt(sg.quedaria) + ' kg</b> (' + (sg.desvio>=0?'+':'') + fmt(sg.desvio) + ' kg frente al resto) &middot; '
+            + (bp>=0? (fmt(bp) + ' kg por debajo del payload') : ('<span style="color:var(--red)">pasa el payload por ' + fmt(-bp) + ' kg</span>'))
+            + '<br>&nbsp;&nbsp;Saldrian ' + orig + '. '
+            + '<button class="btn-ghost" style="padding:4px 10px; font-size:11px" onclick="aplicarTraslado(' + sg.camIdx + ',' + i + ',' + sg.bultos + ')">Aplicar</button></div>';
+        }).join("");
       }
     }
     const exc = excesosPorIdx[i];
@@ -1682,10 +1719,34 @@ function computeDistribution(){
     });
     const b = pendingSplits.map(function(s){
       const info = lote.contenedores[s.contIdx];
-      return {contIdx:s.contIdx, peso:s.peso, bultos:s.bultos, settled:false, tipo:(info&&info.parcial)?"parcial":"entero", pesoEstimado:s.peso, manual:!!s.manual};
+      return {contIdx:s.contIdx, peso:s.peso, bultos:s.bultos, settled:false, tipo:(info&&info.parcial)?"parcial":"entero", pesoEstimado:s.peso, manual:!!s.manual, traslado:!!s.traslado};
     });
     return a.concat(b);
   }
+
+  // Traslados que TU aplicaste: n bultos del SALDO de una unidad van a un contenedor ENTERO
+  // que quedo muy bajo (unica excepcion a "los saldos van a parciales"). Se reservan primero,
+  // para que el entero ya cuente con ese peso cuando llegue su propio camion.
+  const traslados = lote.traslados || {};
+  const fijos = lote.camiones.map(function(){ return []; });
+  Object.keys(traslados).forEach(function(key){
+    const pp0 = key.split("_").map(Number), ci = pp0[0], cj = pp0[1];
+    const n0 = parseInt(traslados[key],10);
+    if(!(n0>0) || ci<0 || ci>=lote.camiones.length || !contAbierto(cj)) return;
+    const cam = lote.camiones[ci];
+    const sp = settled.settledSplitsPerTruck[ci];
+    if(sp.some(function(s){ return s.contIdx===cj; })) return;      // ya se bajo de verdad ahi
+    const nom = cam.bultos? cam.peso/cam.bultos : 0;
+    const bp0 = (cam.completo && sp.length>0)? 0 : Math.max(0, (cam.bultos||0) - (settled.settledBultosPerTruck[ci]||0));
+    const saldoKg0 = Math.max(0, (cam.peso||0) - (settled.settledPerTruck[ci]||0) - (settled.droppedEstPerTruck[ci]||0));
+    const hayCosco0 = sp.some(function(s){ return !s.sinPesar; });
+    const pp = (hayCosco0 && bp0>=1 && saldoKg0>0)? saldoKg0/bp0 : nom;
+    const yaFijos = fijos[ci].reduce(function(a,f){ return a+f.bultos; },0);
+    const n = Math.min(n0, bp0 - yaFijos);
+    if(n<1 || pp<=0) return;
+    fijos[ci].push({contIdx:cj, bultos:n, peso:n*pp, manual:true, traslado:true});
+    saldo[cj] += n*pp;
+  });
 
   // ---- Regla (ambos modos): cada camion baja en SU contenedor ENTERO; lo que le sobra (saldo)
   //      va SOLO a contenedores marcados como PARCIAL. La meta de cada uno la da computeTargets. ----
@@ -1722,6 +1783,7 @@ function computeDistribution(){
     const pendingSplits = [];
     const yaLiquidadoAqui = {};
     settledSplits.forEach(function(s){ yaLiquidadoAqui[s.contIdx] = true; });
+    fijos[camIdx].forEach(function(f){ pendingSplits.push(f); bultosPend -= f.bultos; });
 
     function asignarA(idx, manual){
       if(bultosPend<1 || pesoProm<=0 || yaLiquidadoAqui[idx] || pendingSplits.some(function(p){ return p.contIdx===idx; })) return false;
@@ -1787,54 +1849,97 @@ function computeSugerencias(dist){
   const totalPeso = lote.camiones.reduce(function(s,c){ return s+(c.peso||0); },0);
   const totalBultos = lote.camiones.reduce(function(s,c){ return s+(c.bultos||0); },0);
   const avgPesoBulto = totalBultos? totalPeso/totalBultos : 0;
-  const res = {};
-  lote.contenedores.forEach(function(c,idx){
-    let acum=0, conf=0, baj=0, bult=0;
-    dist.perCamion.forEach(function(info){
-      info.splits.forEach(function(s){
-        if(s.contIdx!==idx) return;
-        acum += s.peso; bult += s.bultos;
-        if(s.settled) conf += s.peso;
-        else if(s.bajado) baj += s.peso;
+
+  const acumMap = {}, confMap = {}, bajMap = {}, bultMap = {}, tieneSplit = {};
+  lote.contenedores.forEach(function(c,idx){ acumMap[idx]=0; confMap[idx]=0; bajMap[idx]=0; bultMap[idx]=0; tieneSplit[idx]=false; });
+  dist.perCamion.forEach(function(info){
+    info.splits.forEach(function(s){
+      acumMap[s.contIdx] += s.peso; bultMap[s.contIdx] += s.bultos; tieneSplit[s.contIdx] = true;
+      if(s.settled) confMap[s.contIdx] += s.peso;
+      else if(s.bajado) bajMap[s.contIdx] += s.peso;
+    });
+  });
+
+  // Unidades con bultos de SALDO por bajar (nunca su entero) que podrian ir al contenedor idx.
+  // ref=null: se llena hasta la meta. ref=numero: se busca quedar lo mas cerca posible de ese peso
+  // (sin pasar nunca la meta).
+  function candidatos(idx, meta, ref){
+    const acum = acumMap[idx];
+    const out = [];
+    lote.camiones.forEach(function(cam,ci){
+      const info = dist.perCamion[ci];
+      if(!info || !info.pesoProm) return;
+      if(info.splits.some(function(s){ return s.contIdx===idx; })) return;
+      const pend = info.splits.filter(function(s){ return !s.settled && !s.bajado; });
+      const tieneBajada = info.splits.some(function(s){ return s.settled || s.bajado; });
+      const saldoSplits = tieneBajada? pend : pend.slice(1);
+      const pendOtros = saldoSplits.reduce(function(a,s){ return a+s.bultos; },0) + (info.sobranteBultos||0);
+      if(pendOtros<1) return;
+      const p = info.pesoProm;
+      const maxK = Math.min(pendOtros, Math.floor((meta-acum)/p));
+      if(maxK<1) return;
+      let k = maxK;
+      if(ref!==null){
+        const kLow = Math.max(1, Math.floor((ref-acum)/p));
+        const ops = [Math.min(kLow,maxK), Math.min(kLow+1,maxK)];
+        k = ops.reduce(function(b,x){ return Math.abs(acum+x*p-ref) < Math.abs(acum+b*p-ref)? x : b; }, ops[0]);
+      }
+      // De donde saldrian esos bultos hoy: primero lo que esta en piso, luego su saldo planeado (del ultimo al primero).
+      let resto = k; const origen = [];
+      const piso = info.sobranteBultos||0;
+      if(piso>0 && resto>0){ const t = Math.min(piso,resto); origen.push({codigo:"EN PISO", quitar:t, antes:null, despues:null}); resto -= t; }
+      for(let q=saldoSplits.length-1; q>=0 && resto>0; q--){
+        const sp = saldoSplits[q]; const t = Math.min(sp.bultos, resto);
+        origen.push({codigo:lote.contenedores[sp.contIdx].codigo, quitar:t, antes:acumMap[sp.contIdx], despues:acumMap[sp.contIdx]-t*p});
+        resto -= t;
+      }
+      const kgCosco = info.splits.filter(function(s){ return s.settled; }).reduce(function(a,s){ return a+s.peso; },0);
+      const kgBajadoEst = info.splits.filter(function(s){ return s.bajado; }).reduce(function(a,s){ return a+s.peso; },0);
+      out.push({
+        camIdx:ci, placa:cam.placa, bultos:k, peso:k*p,
+        quedaria: acum + k*p, faltaria: (meta-acum) - k*p,
+        desvio: (ref!==null)? (acum + k*p - ref) : null,
+        yaBajo: info.splits.some(function(s){ return s.settled; }),
+        enPiso: piso>0,
+        pesoBulto: p, pesoBultoNom: info.pesoPromNom, saldoKg: info.saldoKg,
+        guia: cam.peso, kgBajados: kgCosco + kgBajadoEst, kgBajadoEst: kgBajadoEst, bultosSaldo: pendOtros,
+        origen: origen
       });
     });
+    out.sort(function(a,b){
+      const da = (ref!==null)? Math.abs(a.desvio) : a.faltaria;
+      const db = (ref!==null)? Math.abs(b.desvio) : b.faltaria;
+      if(da!==db) return da-db;
+      return (b.yaBajo?1:0)-(a.yaBajo?1:0);
+    });
+    return out;
+  }
+
+  const res = {};
+  lote.contenedores.forEach(function(c,idx){
+    const acum = acumMap[idx];
     const abierto = c.payload>0 && !c.cerrado;
-    const gap = abierto? ((targets[idx]||0) - acum) : 0;
-    const sug = [];
-    if(abierto && gap >= minBulto){
-      lote.camiones.forEach(function(cam,ci){
-        const info = dist.perCamion[ci];
-        if(!info || !info.pesoProm) return;
-        if(info.splits.some(function(s){ return s.contIdx===idx; })) return;
-        // Solo cuenta el SALDO de la unidad (lo que le queda despues de su
-        // primera bajada), nunca su entero.
-        const pend = info.splits.filter(function(s){ return !s.settled && !s.bajado; });
-        const tieneSettled = info.splits.some(function(s){ return s.settled || s.bajado; });
-        const saldoSplits = tieneSettled? pend : pend.slice(1);
-        const pendOtros = saldoSplits.reduce(function(a,s){ return a+s.bultos; },0) + (info.sobranteBultos||0);
-        if(pendOtros<1) return;
-        const k = Math.min(pendOtros, Math.floor(gap/info.pesoProm));
-        if(k<1) return;
-        const kgCosco = info.splits.filter(function(s){ return s.settled; }).reduce(function(a,s){ return a+s.peso; },0);
-        const kgBajadoEst = info.splits.filter(function(s){ return s.bajado; }).reduce(function(a,s){ return a+s.peso; },0);
-        const kgBajados = kgCosco + kgBajadoEst;
-        sug.push({
-          camIdx:ci, placa:cam.placa, bultos:k, peso:k*info.pesoProm,
-          quedaria: acum + k*info.pesoProm, faltaria: gap - k*info.pesoProm,
-          yaBajo: info.splits.some(function(s){ return s.settled; }),
-          enPiso: (info.sobranteBultos||0)>0,
-          pesoBulto: info.pesoProm, pesoBultoNom: info.pesoPromNom, saldoKg: info.saldoKg,
-          guia: cam.peso, kgBajados: kgBajados, kgBajadoEst: kgBajadoEst, bultosSaldo: pendOtros
-        });
+    const meta = targets[idx]||0;
+    const gap = abierto? (meta - acum) : 0;
+    const sug = (abierto && gap>=minBulto)? candidatos(idx, meta, null) : [];
+
+    // ENTERO que quedo MUY bajo (5% o mas bajo su meta) frente al resto de enteros:
+    // unico caso donde se propone levantarlo con saldo de otras unidades.
+    let bajo = false, ref = null, promOtros = null, sugE = [];
+    if(!c.parcial && abierto && tieneSplit[idx]){
+      const otros = [];
+      lote.contenedores.forEach(function(x,j){
+        if(j!==idx && !x.parcial && x.payload>0 && !x.cerrado && tieneSplit[j]) otros.push(acumMap[j]);
       });
-      sug.sort(function(a,b){
-        if(a.faltaria!==b.faltaria) return a.faltaria-b.faltaria;
-        return (b.yaBajo?1:0)-(a.yaBajo?1:0);
-      });
+      promOtros = otros.length? otros.reduce(function(a,b){ return a+b; },0)/otros.length : null;
+      ref = (promOtros!==null)? Math.min(meta, promOtros) : meta;
+      bajo = gap >= Math.max(minBulto, 0.05*meta) && (ref-acum) >= minBulto;
+      if(bajo) sugE = candidatos(idx, meta, ref);
     }
-    res[idx] = {acum:acum, confirmado:conf, bajado:baj, planeado:acum-conf-baj, bultos:bult, meta:(targets[idx]||0),
+    res[idx] = {acum:acum, confirmado:confMap[idx], bajado:bajMap[idx], planeado:acum-confMap[idx]-bajMap[idx], bultos:bultMap[idx], meta:meta,
       gap:gap, gapBultos:(avgPesoBulto? Math.floor(Math.max(0,gap)/avgPesoBulto) : null),
-      completo:(abierto && gap>=0 && gap<minBulto), sugerencias:sug.slice(0,3)};
+      completo:(abierto && gap>=0 && gap<minBulto), sugerencias:sug.slice(0,3),
+      bajo:bajo, ref:ref, promOtros:promOtros, sugEntero:sugE.slice(0,3)};
   });
   return res;
 }
@@ -2150,7 +2255,7 @@ function exportPDF(){
 function vaciarLote(){
   if(!confirm("Esto borra los camiones, contenedores y pesos COSCO de este lote (se conserva el booking/cliente). Continuar?")) return;
   const lote = currentLote();
-  lote.camiones = []; lote.contenedores = []; lote.cosco = {}; lote.bultosReales = {}; lote.estimados = {};
+  lote.camiones = []; lote.contenedores = []; lote.cosco = {}; lote.bultosReales = {}; lote.estimados = {}; lote.traslados = {};
   saveApp();
   renderCamiones(); renderContenedores(); renderResumen();
 }
