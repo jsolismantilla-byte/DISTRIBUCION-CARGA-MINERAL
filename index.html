@@ -314,9 +314,16 @@
       </div>
       <div class="footnote" id="modo-explica"></div>
       <div class="field" id="wrap-peso-trabajar" style="margin-top:10px">
-        <label>Peso a trabajar por contenedor (kg) — solo Distribucion pareja</label>
-        <input id="in-peso-trabajar" type="number" inputmode="numeric" placeholder="vacio = peso de guias / contenedores" onchange="setPesoTrabajar(this.value)">
-        <div class="footnote">Si lo escribes, ese sera el peso meta de todos los contenedores abiertos (sin pasar nunca su payload), en vez de sumar las guias entre la cantidad de contenedores.</div>
+        <label>Peso a trabajar en Distribucion pareja</label>
+        <div class="seg">
+          <button id="btn-origen-auto" onclick="setOrigenPareja('auto')">Tengo todos los camiones</button>
+          <button id="btn-origen-manual" onclick="setOrigenPareja('manual')">Yo pongo el peso</button>
+        </div>
+        <div class="footnote" id="origen-explica"></div>
+        <div id="wrap-peso-manual" style="margin-top:8px">
+          <label>Peso a trabajar para TODOS los contenedores (kg)</label>
+          <input id="in-peso-trabajar" type="number" inputmode="numeric" placeholder="ej. 28234" onchange="setPesoTrabajar(this.value)">
+        </div>
       </div>
       <div class="field" id="wrap-parciales-sim" style="margin-top:10px">
         <label>Parciales abiertos a la vez — solo Pegado al payload</label>
@@ -346,7 +353,7 @@
     <div class="card">
       <h2>Agregar varios contenedores a la vez</h2>
       <div class="field">
-        <label>Un contenedor por linea: Codigo, Tara, Payload</label>
+        <label>Un contenedor por linea: Codigo, Tara, Payload, Peso a trabajar (opcional)</label>
         <textarea id="in-bulk-contenedores" rows="5" placeholder="MSCU 123456 7, 2250, 28230&#10;CMAU 234567 8, 2300, 28180"></textarea>
       </div>
       <div class="footnote">Separa cada dato con coma; una linea por contenedor. Se agregan como "entero", abiertos y sin orden fijo.</div>
@@ -361,6 +368,7 @@
         <div class="field"><label>Tara (kg)</label><input id="in-tara" type="number" inputmode="numeric" placeholder="2250"></div>
         <div class="field"><label>Payload max. (kg)</label><input id="in-payload" type="number" inputmode="numeric" placeholder="28230"></div>
       </div>
+      <div class="field"><label>Peso a trabajar de este contenedor (kg) — opcional, solo Distribucion pareja</label><input id="in-meta-manual" type="number" inputmode="numeric" placeholder="vacio = el peso a trabajar del lote"></div>
       <label class="radio-opt">
         <input type="checkbox" id="in-parcial">
         <div><div class="t">Es contenedor PARCIAL</div>
@@ -665,10 +673,19 @@ function renderModoUI(){
   document.getElementById("btn-modo-pareja-hdr").classList.toggle("active", modo==="pareja");
   document.getElementById("wrap-peso-trabajar").style.display = (modo==="pareja")? "block" : "none";
   document.getElementById("wrap-parciales-sim").style.display = (modo==="pegado")? "block" : "none";
+  const origen = origenPareja(lote);
+  document.getElementById("btn-origen-auto").classList.toggle("active", origen==="auto");
+  document.getElementById("btn-origen-manual").classList.toggle("active", origen==="manual");
+  document.getElementById("wrap-peso-manual").style.display = (origen==="manual")? "block" : "none";
   document.getElementById("in-peso-trabajar").value = lote.pesoTrabajar || "";
+  const abiertos = lote.contenedores.filter(function(c){ return c.payload>0 && !c.cerrado; }).length;
+  const total = lote.camiones.reduce(function(s,c){ return s+(c.peso||0); },0);
+  document.getElementById("origen-explica").textContent = (origen==="auto")
+    ? ("Suma el peso de todas las guias ingresadas y lo divide entre los contenedores abiertos" + (abiertos? (" (ahora: " + fmt(total/abiertos) + " kg por contenedor)") : "") + ". Usalo cuando ya tienes todos los camiones del lote.")
+    : "Todos los contenedores que agregues (ahora y despues) trabajan a este peso, sin pasar nunca su payload. Sirve cuando aun no tienes todos los camiones. Si un contenedor tiene su propio peso a trabajar, ese manda.";
   document.getElementById("in-parcial-sim").value = lote.parcialesSimultaneos || 3;
   document.getElementById("modo-explica").textContent = modo==="pareja"
-    ? "Distribucion pareja: el peso pendiente se reparte lo mas parejo posible entre TODOS los contenedores abiertos, hacia el peso a trabajar (el que escribas, o el de guias entre contenedores)."
+    ? "Distribucion pareja: el peso pendiente se reparte lo mas parejo posible entre TODOS los contenedores abiertos, hacia el peso a trabajar."
     : "Pegado al payload: cada camion llena su propio contenedor ENTERO (hasta el margen de seguridad); su saldo se reparte entre los parciales abiertos, acercando cada uno a su meta con bigbags completos.";
 }
 
@@ -923,23 +940,27 @@ function guardarContenedor(){
   const parcial = document.getElementById("in-parcial").checked;
   const ordenRaw = document.getElementById("in-orden").value;
   const orden = ordenRaw===""? null : parseFloat(ordenRaw);
+  const metaRaw = parseFloat(document.getElementById("in-meta-manual").value);
+  const metaManual = (metaRaw>0)? metaRaw : null;
   const cerrado = document.getElementById("in-cerrado").checked;
   if(!codigo || !payload){ alert("Completa el codigo y el payload maximo."); return; }
   const lote = currentLote();
   if(editandoContenedorIdx!==null){
     const c = lote.contenedores[editandoContenedorIdx];
     c.codigo = codigo; c.tara = tara; c.payload = payload; c.parcial = parcial; c.orden = orden; c.cerrado = cerrado;
+    c.metaManual = metaManual;
     c.generado = false;
     editandoContenedorIdx = null;
   }else{
-    lote.contenedores.push({codigo:codigo, tara:tara, payload:payload, parcial:parcial, orden:orden, cerrado:cerrado, generado:false});
+    lote.contenedores.push({codigo:codigo, tara:tara, payload:payload, parcial:parcial, orden:orden, cerrado:cerrado, metaManual:metaManual, generado:false});
   }
   saveApp();
-  ["in-codigo","in-tara","in-payload","in-orden"].forEach(function(id){ document.getElementById(id).value=""; });
+  ["in-codigo","in-tara","in-payload","in-orden","in-meta-manual"].forEach(function(id){ document.getElementById(id).value=""; });
   document.getElementById("in-parcial").checked = false;
   document.getElementById("in-cerrado").checked = false;
   actualizarFormContenedorUI();
   renderContenedores();
+  renderCamiones();
 }
 function toggleCerrado(i){
   const c = currentLote().contenedores[i];
@@ -954,6 +975,7 @@ function editarContenedor(i){
   document.getElementById("in-payload").value = c.payload;
   document.getElementById("in-parcial").checked = !!c.parcial;
   document.getElementById("in-orden").value = (c.orden===null||c.orden===undefined)? "" : c.orden;
+  document.getElementById("in-meta-manual").value = (c.metaManual>0)? c.metaManual : "";
   document.getElementById("in-cerrado").checked = !!c.cerrado;
   editandoContenedorIdx = i;
   actualizarFormContenedorUI();
@@ -961,7 +983,7 @@ function editarContenedor(i){
 }
 function cancelarEdicionContenedor(){
   editandoContenedorIdx = null;
-  ["in-codigo","in-tara","in-payload","in-orden"].forEach(function(id){ document.getElementById(id).value=""; });
+  ["in-codigo","in-tara","in-payload","in-orden","in-meta-manual"].forEach(function(id){ document.getElementById(id).value=""; });
   document.getElementById("in-parcial").checked = false;
   document.getElementById("in-cerrado").checked = false;
   actualizarFormContenedorUI();
@@ -984,11 +1006,12 @@ function agregarContenedoresEnBloque(){
     const codigo = partes[0] || "";
     const tara = parseFloat(partes[1]) || 0;
     const payload = parseFloat(partes[2]);
+    const metaB = parseFloat(partes[3]);
     if(!codigo || !payload || isNaN(payload)){
       errores.push("Linea " + (idx+1) + ": \"" + linea + "\" - faltan datos o formato invalido");
       return;
     }
-    lote.contenedores.push({codigo:codigo, tara:tara, payload:payload, parcial:false, orden:null, cerrado:false});
+    lote.contenedores.push({codigo:codigo, tara:tara, payload:payload, parcial:false, orden:null, cerrado:false, metaManual:(metaB>0? metaB : null)});
     agregados++;
   });
   saveApp();
@@ -1049,7 +1072,7 @@ function renderCalcRapido(){
 
   let T = 0, html = "";
   if(modo==="pareja"){
-    const pt = parseFloat(lote.pesoTrabajar);
+    const pt = pesoTrabajarLote(lote);
     T = pt>0? pt : (totalPeso>0? totalPeso/n : 0);
     html += '<div class="l2" style="font-size:13px">' + (pt>0? 'Con el peso a trabajar que pusiste, ' : 'Con <b>' + n + '</b> contenedores y ' + fmt(totalPeso) + ' kg, ') + 'cada contenedor trabajaria</div>'
       + '<div style="font-size:26px; font-weight:800; color:var(--amber); margin:4px 0">' + fmt(T) + ' kg</div>';
@@ -1101,7 +1124,7 @@ function generarContenedores(){
 
   let payloadCada;
   if(modo==="pareja"){
-    const pt = parseFloat(lote.pesoTrabajar);
+    const pt = pesoTrabajarLote(lote);
     if(pt>0) payloadCada = pt;
     else{
       if(totalPeso<=0){ alert("Escribe el peso total enviado (o el peso a trabajar) para calcular el peso pareja."); return; }
@@ -1164,8 +1187,18 @@ function generarContenedores(){
 
 function setPesoTrabajar(val){
   const v = parseFloat(val);
-  currentLote().pesoTrabajar = (isNaN(v) || v<=0)? null : v;
+  const lote = currentLote();
+  lote.pesoTrabajar = (isNaN(v) || v<=0)? null : v;
+  if(lote.pesoTrabajar) lote.origenPareja = "manual";
   saveApp();
+  renderModoUI();
+  renderContenedores();
+  renderCamiones();
+}
+function setOrigenPareja(v){
+  currentLote().origenPareja = v;
+  saveApp();
+  renderModoUI();
   renderContenedores();
   renderCamiones();
 }
@@ -1252,7 +1285,7 @@ function renderContenedores(){
       ? '<span class="pill warn">CERRADO</span>'
       : '<span class="pill ok">ABIERTO</span>';
     const numTxt = (c.orden!=null && c.orden!=="")? (' ' + c.orden) : '';
-    const generadoPill = c.generado? ' <span class="pill amber">GENERADO</span>' : '';
+    const generadoPill = (c.generado? ' <span class="pill amber">GENERADO</span>' : '') + (((lote.modo||'pegado')==='pareja' && c.metaManual>0)? ' <span class="pill">meta propia</span>' : '');
     const badge = c.parcial
       ? '<div class="badge-grande parcial"><span class="ico">\ud83d\udd36</span>PARCIAL' + numTxt + '</div>'
       : '<div class="badge-grande entero"><span class="ico">\ud83d\udce6</span>ENTERO' + numTxt + '</div>';
@@ -1468,11 +1501,20 @@ function computeTargets(){
     const abiertos = lote.contenedores.map(function(c,idx){ return idx; })
       .filter(function(idx){ return lote.contenedores[idx].payload>0 && !lote.contenedores[idx].cerrado; });
     const totalPeso = lote.camiones.reduce(function(s,c){ return s+(c.peso||0); },0);
-    const ptManual = parseFloat(lote.pesoTrabajar);
-    const promedio = ptManual>0? ptManual : (abiertos.length? (totalPeso/abiertos.length) : 0);
+    const ptLote = pesoTrabajarLote(lote);
+    // En automatico, lo que ya tiene peso propio se descuenta y el resto se divide entre los demas.
+    let sumPropios = 0, nSinPropio = 0;
+    abiertos.forEach(function(idx){
+      const c = lote.contenedores[idx];
+      const pr = parseFloat(c.metaManual);
+      if(pr>0) sumPropios += Math.min(c.payload, pr); else nSinPropio++;
+    });
+    const promedioAuto = nSinPropio? (Math.max(0, totalPeso - sumPropios)/nSinPropio) : 0;
     lote.contenedores.forEach(function(c,idx){
       if(c.payload>0 && !c.cerrado){
-        targets[idx] = Math.max(settled.settledPerContainer[idx]||0, Math.min(c.payload, promedio));
+        const propio = parseFloat(c.metaManual);
+        const base = propio>0? propio : (ptLote>0? ptLote : promedioAuto);
+        targets[idx] = Math.max(settled.settledPerContainer[idx]||0, Math.min(c.payload, base));
       }else{
         targets[idx] = settled.settledPerContainer[idx]||0;
       }
@@ -1499,6 +1541,15 @@ function anexosDe(cam){
     (cam.parcialIdx===undefined? null : cam.parcialIdx),
     null, null
   ];
+}
+
+function origenPareja(lote){
+  if(lote.origenPareja==="auto" || lote.origenPareja==="manual") return lote.origenPareja;
+  return parseFloat(lote.pesoTrabajar)>0? "manual" : "auto";
+}
+// Peso a trabajar puesto a mano para TODOS los contenedores (0 = automatico).
+function pesoTrabajarLote(lote){
+  return (origenPareja(lote)==="manual" && parseFloat(lote.pesoTrabajar)>0)? parseFloat(lote.pesoTrabajar) : 0;
 }
 
 function getMinBulto(lote){
