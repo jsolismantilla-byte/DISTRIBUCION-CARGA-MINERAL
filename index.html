@@ -80,6 +80,10 @@
   .lin .num.pos{color:var(--red);}
   .lin .num.neg{color:#6FB6FF;}
   .fecha-in{background:var(--surface-2); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:3px 6px; font-size:11px; font-family:var(--mono); color-scheme:dark; width:auto;}
+  .ocr-modal{position:fixed; inset:0; background:rgba(8,12,16,.88); z-index:80; display:none; overflow:auto; padding:14px;}
+  .ocr-sheet{max-width:640px; margin:0 auto; background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:14px;}
+  .ocr-row{border:1px solid var(--line); border-radius:10px; padding:10px; margin-top:10px; background:var(--surface-2);}
+  .ocr-grid{display:grid; grid-template-columns:1fr 1fr; gap:8px;}
   .field select{
     width:100%; padding:9px 8px; border-radius:8px; border:1px solid var(--line);
     background:var(--surface-2); color:var(--text); font-size:13px; font-family:var(--mono);
@@ -296,6 +300,11 @@
       </div>
       <div class="footnote">El tracto y el orden de llegada pueden ir vacios (deja la coma). Separa cada dato con coma; una linea por camion.</div>
       <button class="btn-primary" style="margin-top:8px" onclick="agregarCamionesEnBloque()">Agregar todos</button>
+      <div class="footnote" style="margin-top:12px; font-weight:600; color:var(--text-dim)">O desde una foto de la lista (placa, tracto, bultos, peso):</div>
+      <div class="row2" style="margin-top:6px">
+        <button class="btn-ghost" style="padding:10px" onclick="abrirFotoLista('cam','camara')">&#128247; Tomar foto</button>
+        <button class="btn-ghost" style="padding:10px" onclick="abrirFotoLista('cam','galeria')">&#128444; Elegir imagen</button>
+      </div>
       <div id="bulk-camiones-resultado" class="footnote"></div>
     </div>
 
@@ -361,6 +370,11 @@
       </div>
       <div class="footnote">Separa cada dato con coma; una linea por contenedor. Se agregan como "entero", abiertos y sin orden fijo.</div>
       <button class="btn-primary" style="margin-top:8px" onclick="agregarContenedoresEnBloque()">Agregar todos</button>
+      <div class="footnote" style="margin-top:12px; font-weight:600; color:var(--text-dim)">O desde una foto de la lista (codigo, tara, payload):</div>
+      <div class="row2" style="margin-top:6px">
+        <button class="btn-ghost" style="padding:10px" onclick="abrirFotoLista('cont','camara')">&#128247; Tomar foto</button>
+        <button class="btn-ghost" style="padding:10px" onclick="abrirFotoLista('cont','galeria')">&#128444; Elegir imagen</button>
+      </div>
       <div id="bulk-contenedores-resultado" class="footnote"></div>
     </div>
 
@@ -422,6 +436,10 @@
   </section>
 
 </main>
+
+<div class="ocr-modal" id="ocr-modal"><div class="ocr-sheet" id="ocr-sheet"></div></div>
+<input type="file" id="in-foto-camara" accept="image/*" capture="environment" style="display:none" onchange="fotoSeleccionada(this)">
+<input type="file" id="in-foto-galeria" accept="image/*" multiple style="display:none" onchange="fotoSeleccionada(this)">
 
 <nav class="tabs">
   <button class="tab-btn active" data-view="camiones" onclick="showView('camiones')"><span class="ico">&#128666;</span>Camiones</button>
@@ -3298,6 +3316,473 @@ function exportPDF(){
     doc.text("Generado " + fecha + "  |  Página " + p + " de " + n, W-M, H-22, {align:"right"});
   }
   descargarBlob(reporteNombre(lote,"pdf"), doc.output("blob"));
+}
+
+// ---------------------------------------------------------------
+// FOTO DE UNA LISTA -> contenedores / camiones
+// La foto se lee con OCR en el propio telefono y SIEMPRE se muestra para revisar antes de agregar.
+// ---------------------------------------------------------------
+const OCR_TESSERACT_URL = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
+let ocrWorker = null;
+let ocrProgreso = null;
+let fotoState = null;
+
+// ---- 1) preprocesado de pixeles (RGBA): gris -> endereza -> quita sombras -> borra lineas de tabla ----
+function ocrFondo(g, w, h){
+  // promedio local en ventana grande (imagen integral): estima el color del papel con sombras e iluminacion despareja
+  const r = Math.max(12, Math.round(Math.min(w,h)/24));
+  const W1 = w+1;
+  const integ = new Float64Array(W1*(h+1));
+  for(let y=0;y<h;y++){
+    let fila = 0;
+    for(let x=0;x<w;x++){ fila += g[y*w+x]; integ[(y+1)*W1+(x+1)] = integ[y*W1+(x+1)] + fila; }
+  }
+  const bg = new Float32Array(w*h);
+  for(let y=0;y<h;y++){
+    const y0 = Math.max(0,y-r), y1 = Math.min(h-1,y+r);
+    for(let x=0;x<w;x++){
+      const x0 = Math.max(0,x-r), x1 = Math.min(w-1,x+r);
+      const area = (x1-x0+1)*(y1-y0+1);
+      bg[y*w+x] = (integ[(y1+1)*W1+(x1+1)] - integ[y0*W1+(x1+1)] - integ[(y1+1)*W1+x0] + integ[y0*W1+x0])/area;
+    }
+  }
+  return bg;
+}
+function ocrTinta(g, bg, w, h){
+  const bin = new Uint8Array(w*h);
+  for(let i=0;i<w*h;i++) bin[i] = (g[i] < bg[i]*0.86)? 1 : 0;
+  return bin;
+}
+function ocrInclinacion(bin, w, h){
+  // angulo (grados) que alinea mas puntos de tinta en filas (texto y lineas de la tabla)
+  const paso = Math.max(1, Math.round(Math.max(w,h)/700));
+  const pts = [];
+  for(let y=0;y<h;y+=paso){ for(let x=0;x<w;x+=paso){ if(bin[y*w+x]) pts.push(x, y); } }
+  const cx = w/2, cy = h/2, diag = Math.hypot(w,h)/paso;
+  function puntaje(grados){
+    const a = grados*Math.PI/180, c = Math.cos(a), s = Math.sin(a);
+    const hist = new Float64Array(Math.ceil(diag)+4);
+    for(let i=0;i<pts.length;i+=2){
+      const yy = ((pts[i+1]-cy)*c - (pts[i]-cx)*s)/paso + diag/2;
+      hist[Math.max(0, Math.min(hist.length-1, Math.round(yy)))]++;
+    }
+    let sc = 0; for(let i=0;i<hist.length;i++) sc += hist[i]*hist[i];
+    return sc;
+  }
+  let mejor = 0, mejorSc = puntaje(0);
+  for(let a=-8; a<=8; a+=0.5){ const sc = puntaje(a); if(sc>mejorSc){ mejorSc = sc; mejor = a; } }
+  for(let a=mejor-0.5; a<=mejor+0.5; a+=0.1){ const sc = puntaje(a); if(sc>mejorSc){ mejorSc = sc; mejor = a; } }
+  return mejor;
+}
+function ocrRotarGris(g, w, h, grados){
+  const a = grados*Math.PI/180, c = Math.cos(a), s = Math.sin(a);
+  const cx = w/2, cy = h/2;
+  const out = new Float32Array(w*h).fill(255);
+  for(let y=0;y<h;y++){
+    for(let x=0;x<w;x++){
+      const sx = (x-cx)*c - (y-cy)*s + cx, sy = (x-cx)*s + (y-cy)*c + cy;
+      const x0 = Math.floor(sx), y0 = Math.floor(sy);
+      if(x0<0 || y0<0 || x0>=w-1 || y0>=h-1) continue;
+      const fx = sx-x0, fy = sy-y0, i = y0*w+x0;
+      out[y*w+x] = g[i]*(1-fx)*(1-fy) + g[i+1]*fx*(1-fy) + g[i+w]*(1-fx)*fy + g[i+w+1]*fx*fy;
+    }
+  }
+  return out;
+}
+function ocrPrepararPixeles(data, w, h){
+  const n = w*h;
+  let g = new Float32Array(n);
+  for(let i=0;i<n;i++) g[i] = data[i*4]*0.299 + data[i*4+1]*0.587 + data[i*4+2]*0.114;
+  let bg = ocrFondo(g, w, h);
+  let bin = ocrTinta(g, bg, w, h);
+  const ang = ocrInclinacion(bin, w, h);
+  if(Math.abs(ang)>=0.4){
+    g = ocrRotarGris(g, w, h, ang);
+    bg = ocrFondo(g, w, h);
+    bin = ocrTinta(g, bg, w, h);
+  }
+  // lineas largas de tabla (horizontales y verticales): se detectan en la tinta y se pintan de blanco
+  const borrar = new Uint8Array(n);
+  const largoH = Math.max(50, Math.round(w*0.05)), largoV = Math.max(40, Math.round(h*0.05));
+  function marcarRuns(esH){
+    const L = esH? w : h, M = esH? h : w, minLen = esH? largoH : largoV;
+    for(let m=0;m<M;m++){
+      let ini = -1, ult = -1;
+      for(let l=0;l<=L;l++){
+        const v = (l<L)? bin[esH? (m*w+l) : (l*w+m)] : 0;
+        if(v){ if(ini<0) ini = l; ult = l; }
+        else if(ini>=0 && (l-ult)>4){
+          if(ult-ini+1 >= minLen){ for(let q=ini;q<=ult;q++) borrar[esH? (m*w+q) : (q*w+m)] = 1; }
+          ini = -1;
+        }
+      }
+    }
+  }
+  marcarRuns(true); marcarRuns(false);
+  const out = new Uint8ClampedArray(n*4);
+  for(let y=0;y<h;y++){
+    for(let x=0;x<w;x++){
+      const i = y*w+x;
+      let v = Math.min(255, g[i]/Math.max(1,bg[i])*238);        // papel ~blanco, tinta oscura (sin sombras)
+      if(borrar[i] || (x>0 && borrar[i-1]) || (x<w-1 && borrar[i+1]) || (y>0 && borrar[i-w]) || (y<h-1 && borrar[i+w])) v = 255;
+      out[i*4] = out[i*4+1] = out[i*4+2] = v; out[i*4+3] = 255;
+    }
+  }
+  return out;
+}
+
+// ---- 2) interpretacion del texto leido ----
+function ocrNorm(s){
+  return String(s||"").toUpperCase().replace(/[\u00A0\t]+/g," ").replace(/[|\u00A6\\]/g," ").replace(/ {2,}/g," ").trim();
+}
+function ocrNumeros(txt){
+  const out = [];
+  const re = /\d{1,3}(?:[.,]\d{3})+(?!\d)|\d+(?:[.,]\d{1,2})?(?!\d)|\d+/g;
+  let m;
+  while((m = re.exec(txt))!==null){
+    const raw = m[0];
+    let v;
+    if(/^\d{1,3}([.,]\d{3})+$/.test(raw)) v = parseInt(raw.replace(/[.,]/g,""),10);
+    else if(/[.,]\d{1,2}$/.test(raw)) v = parseFloat(raw.replace(",","."));
+    else v = parseInt(raw,10);
+    out.push({v:v, raw:raw, idx:m.index, fin:m.index+raw.length});
+  }
+  return out;
+}
+function ocrADigitos(s){ return s.replace(/O/g,"0").replace(/[IL]/g,"1").replace(/S/g,"5").replace(/B/g,"8").replace(/Z/g,"2").replace(/G/g,"6"); }
+function ocrALetras(s){ return s.replace(/0/g,"O").replace(/1/g,"I").replace(/5/g,"S").replace(/8/g,"B").replace(/2/g,"Z").replace(/6/g,"G"); }
+function ocrIso6346(c){
+  if(!/^[A-Z]{4}\d{7}$/.test(c)) return false;
+  const L = {A:10,B:12,C:13,D:14,E:15,F:16,G:17,H:18,I:19,J:20,K:21,L:23,M:24,N:25,O:26,P:27,Q:28,R:29,S:30,T:31,U:32,V:34,W:35,X:36,Y:37,Z:38};
+  let suma = 0;
+  for(let i=0;i<10;i++){ const ch = c[i]; suma += (/[A-Z]/.test(ch)? L[ch] : parseInt(ch,10)) * Math.pow(2,i); }
+  return ((suma % 11) % 10) === parseInt(c[10],10);
+}
+// Codigo de contenedor ISO 6346 (4 letras + 6 digitos + digito de control), con o sin espacios/guion.
+function ocrBuscarContenedor(linea){
+  const re = /([A-Z0-9]{4})[\s-]?([0-9OILSBZG]{6})[\s-]?([0-9OILSBZG])(?![0-9A-Z])/;
+  const m = re.exec(linea);
+  if(m){
+    const codigo = ocrALetras(m[1]) + ocrADigitos(m[2]) + ocrADigitos(m[3]);
+    if(/^[A-Z]{4}\d{7}$/.test(codigo)){
+      return {codigo:codigo, iso:ocrIso6346(codigo), resto:(linea.slice(0,m.index) + " " + linea.slice(m.index+m[0].length))};
+    }
+  }
+  // codigo que no es ISO: primera palabra con letras y numeros
+  const tokens = linea.split(" ");
+  for(let i=0;i<tokens.length;i++){
+    const t = tokens[i];
+    if(t.length>=5 && /[A-Z]/.test(t) && /\d/.test(t) && /^[A-Z0-9-]+$/.test(t)){
+      return {codigo:t, iso:false, resto:tokens.slice(0,i).concat(tokens.slice(i+1)).join(" ")};
+    }
+  }
+  return null;
+}
+function ocrInterpretarContenedores(texto){
+  const filas = [];
+  String(texto||"").split(/\r?\n/).forEach(function(crudo){
+    const linea = ocrNorm(crudo);
+    if(linea.length<6) return;
+    const c = ocrBuscarContenedor(linea);
+    if(!c) return;
+    const nums = ocrNumeros(c.resto).map(function(x){ return x.v; });
+    const tara = nums.filter(function(v){ return v>=1500 && v<=6000; })[0];
+    const payload = nums.filter(function(v){ return v>=15000 && v<=45000; })[0];
+    if(!c.iso && payload===undefined) return;                       // titulo u otra linea cualquiera
+    const avisos = [];
+    if(!c.iso) avisos.push("revisar codigo (el digito de control no coincide)");
+    if(payload===undefined) avisos.push("falta el payload");
+    filas.push({incluir:(payload!==undefined), codigo:c.codigo, tara:(tara!==undefined? tara : 0), payload:(payload!==undefined? payload : 0), avisos:avisos});
+  });
+  return filas;
+}
+// Placa: 3 letras/numeros + 3 digitos (con o sin guion/espacio). Ej. ABC-123, T4K 887, T8F871
+function ocrBuscarPlacas(linea){
+  const re = /(^|[^A-Z0-9])([A-Z0-9]{3})\s?-?\s?([0-9OILSBZG]{3})(?![A-Z0-9])/g;
+  const out = [];
+  let m;
+  while((m = re.exec(linea))!==null){
+    if(!/[A-Z]/.test(m[2])) continue;
+    const ini = m.index + m[1].length;
+    out.push({txt:m[2] + "-" + ocrADigitos(m[3]), ini:ini, fin:m.index + m[0].length});
+  }
+  return out;
+}
+function ocrInterpretarCamiones(texto){
+  const filas = [];
+  const lineas = String(texto||"").split(/\r?\n/);
+  const usaOrden = /LLEGADA|ORDEN/.test(ocrNorm(texto));
+  lineas.forEach(function(crudo){
+    const linea = ocrNorm(crudo).replace(/\b\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}\b/g, function(m){ return " ".repeat(m.length); });   // fechas no son datos
+    if(linea.trim().length<6) return;
+    const placas = ocrBuscarPlacas(linea);
+    if(!placas.length) return;
+    // quitar de la linea las placas y el tracto para quedarnos con los numeros
+    let resto = linea;
+    placas.slice().reverse().forEach(function(p){ resto = resto.slice(0,p.ini) + " ".repeat(p.fin-p.ini) + resto.slice(p.fin); });
+    let tracto = "";
+    const mt = /(^|[^A-Z0-9])(TR[- ]?\d{2,4})(?![A-Z0-9])/.exec(resto);
+    if(mt){ tracto = mt[2].replace(/\s/g,"").replace(/^TR-?/,"TR-"); resto = resto.slice(0,mt.index+mt[1].length) + " ".repeat(mt[2].length) + resto.slice(mt.index+mt[1].length+mt[2].length); }
+    const placa = placas[0].txt;
+    if(!tracto && placas[1]) tracto = placas[1].txt;
+    const antes = linea.slice(0, placas[0].ini);
+    const nums = ocrNumeros(resto);
+    // peso: numero grande (kg) o decimal en toneladas
+    let peso = 0, pesoIdx = -1;
+    nums.forEach(function(x,i){
+      if(pesoIdx>=0) return;
+      if(x.v>=5000){ peso = x.v; pesoIdx = i; }
+      else if(x.v>=10 && x.v<=60 && /[.,]\d{1,2}$/.test(x.raw)){ peso = Math.round(x.v*1000); pesoIdx = i; }
+    });
+    const chicos = nums.filter(function(x,i){ return i!==pesoIdx && x.v>=1 && x.v<100 && Math.floor(x.v)===x.v && !/[.,]/.test(x.raw); });
+    let orden = null, bultos = 0;
+    const lider = /^\s*(\d{1,3})\s*[.)-]?\s*$/.exec(antes);
+    let pool = chicos.slice();
+    const despues = pool.filter(function(x){ return x.idx >= placas[0].fin; });
+    if(despues.length) pool = despues;                    // los bultos y el peso van despues de la placa
+    if(lider){
+      const nLider = parseInt(lider[1],10);
+      if(usaOrden) orden = nLider;
+      pool = pool.filter(function(x){ return x.idx >= placas[0].fin; });   // el N° de fila no cuenta como bultos
+    }
+    const enRango = pool.filter(function(x){ return x.v>=8 && x.v<=45; });
+    bultos = (enRango[0] || pool[0] || {v:0}).v;
+    if(!peso && !bultos) return;                                      // sin datos utiles
+    const avisos = [];
+    if(!peso) avisos.push("falta el peso");
+    if(!bultos) avisos.push("faltan los bultos");
+    filas.push({incluir:(peso>0 && bultos>0), placa:placa, tracto:tracto, bultos:bultos, peso:peso, orden:orden, avisos:avisos});
+  });
+  return filas;
+}
+function ocrInterpretar(texto, tipo){
+  return tipo==="cont"? ocrInterpretarContenedores(texto) : ocrInterpretarCamiones(texto);
+}
+
+// ---- 3) lectura (Tesseract.js, se carga solo cuando se usa) ----
+function cargarTesseract(){
+  return new Promise(function(res, rej){
+    if(window.Tesseract) return res(window.Tesseract);
+    const s = document.createElement("script");
+    s.src = OCR_TESSERACT_URL;
+    s.onload = function(){ res(window.Tesseract); };
+    s.onerror = function(){ rej(new Error("No se pudo cargar el lector de texto. Verifica tu conexion a internet (solo la primera vez).")); };
+    document.head.appendChild(s);
+  });
+}
+function obtenerWorkerOCR(){
+  if(ocrWorker) return Promise.resolve(ocrWorker);
+  return cargarTesseract().then(function(T){
+    return T.createWorker("eng", 1, {logger:function(m){ if(ocrProgreso) ocrProgreso(m); }});
+  }).then(function(w){
+    return w.setParameters({tessedit_pageseg_mode:"6", preserve_interword_spaces:"1"}).then(function(){ ocrWorker = w; return w; });
+  });
+}
+function cargarBitmapFoto(file){
+  if(window.createImageBitmap){
+    return window.createImageBitmap(file, {imageOrientation:"from-image"}).catch(function(){ return cargarImgFoto(file); });
+  }
+  return cargarImgFoto(file);
+}
+function cargarImgFoto(file){
+  return new Promise(function(res, rej){
+    const img = new Image();
+    img.onload = function(){ res(img); };
+    img.onerror = function(){ rej(new Error("No se pudo abrir la imagen.")); };
+    img.src = URL.createObjectURL(file);
+  });
+}
+function canvasParaOCR(bmp, modo){
+  // las fotos chicas se agrandan (el lector rinde mejor con letras de ~25 px) y las enormes se reducen
+  const mx = Math.max(bmp.width, bmp.height);
+  const k = (mx<1400)? Math.min(3, 1800/mx) : (mx>2200? 2200/mx : 1);
+  const w = Math.round(bmp.width*k), h = Math.round(bmp.height*k);
+  const cv = document.createElement("canvas");
+  cv.width = w; cv.height = h;
+  const ctx = cv.getContext("2d");
+  ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(bmp, 0, 0, w, h);
+  const id = ctx.getImageData(0, 0, w, h);
+  if(modo==="gris"){
+    const d = id.data;
+    for(let i=0;i<d.length;i+=4){ const v = d[i]*0.299 + d[i+1]*0.587 + d[i+2]*0.114; d[i] = d[i+1] = d[i+2] = v; }
+  }else{
+    id.data.set(ocrPrepararPixeles(id.data, w, h));
+  }
+  ctx.putImageData(id, 0, 0);
+  return cv;
+}
+// Que tan "buena" es una lectura: filas completas (y codigos de contenedor con digito de control valido).
+function puntajeLectura(texto, tipo){
+  return ocrInterpretar(texto, tipo).reduce(function(a,f){
+    return a + (f.incluir? 1 : 0) + ((tipo==="cont" && !f.avisos.some(function(x){ return /codigo/.test(x); }))? 0.5 : 0);
+  }, 0);
+}
+// Primero con la imagen "limpia" (sin sombras ni lineas de tabla); si sale pobre, se prueba tambien con la imagen original en gris.
+function leerTextoDeFoto(file, tipo){
+  return cargarBitmapFoto(file).then(function(bmp){
+    return obtenerWorkerOCR().then(function(w){
+      return w.recognize(canvasParaOCR(bmp, "prep")).then(function(r1){
+        const p1 = puntajeLectura(r1.data.text, tipo);
+        if(p1>=3 && r1.data.confidence>=75) return r1.data.text;
+        return w.recognize(canvasParaOCR(bmp, "gris")).then(function(r2){
+          const p2 = puntajeLectura(r2.data.text, tipo);
+          return (p2>p1 || (p2===p1 && r2.data.confidence>r1.data.confidence))? r2.data.text : r1.data.text;
+        });
+      });
+    });
+  });
+}
+
+// ---- 4) pantalla de revision ----
+function fotoModal(html){
+  const m = document.getElementById("ocr-modal");
+  document.getElementById("ocr-sheet").innerHTML = html;
+  m.style.display = "block";
+}
+function cerrarFoto(){
+  document.getElementById("ocr-modal").style.display = "none";
+  fotoState = null;
+}
+function abrirFotoLista(tipo, origen){
+  fotoState = {tipo:tipo, filas:[], texto:"", usaOrden:false};
+  document.getElementById(origen==="camara"? "in-foto-camara" : "in-foto-galeria").click();
+}
+function fotoSeleccionada(inp){
+  const archivos = Array.prototype.slice.call(inp.files || []);
+  inp.value = "";
+  if(!archivos.length || !fotoState) return;
+  const titulo = (fotoState.tipo==="cont")? "contenedores" : "camiones";
+  fotoModal('<h2>Leyendo la foto de ' + titulo + '</h2><div class="footnote" id="foto-prog">Preparando la imagen...</div>'
+    + '<div style="height:6px; background:var(--surface-2); border-radius:4px; margin-top:8px"><div id="foto-barra" style="height:6px; width:5%; background:var(--amber); border-radius:4px"></div></div>'
+    + '<div class="footnote" style="margin-top:10px">La primera vez descarga el lector de texto (unos MB) y puede tardar un poco. Despues de leer, revisas y corriges antes de agregar nada.</div>'
+    + '<button class="btn-ghost" style="margin-top:10px" onclick="cerrarFoto()">Cancelar</button>');
+  let hechos = 0, total = archivos.length;
+  ocrProgreso = function(m){
+    const p = document.getElementById("foto-prog"), b = document.getElementById("foto-barra");
+    if(!p) return;
+    if(m.status==="recognizing text"){
+      const pct = Math.round(((hechos + (m.progress||0))/total)*100);
+      p.textContent = "Leyendo el texto... " + pct + "%" + (total>1? (" (imagen " + (hechos+1) + " de " + total + ")") : "");
+      if(b) b.style.width = Math.max(5,pct) + "%";
+    }else{
+      p.textContent = (m.status==="loading tesseract core" || m.status==="initializing tesseract" || m.status==="loading language traineddata" || m.status==="initializing api")? "Preparando el lector de texto..." : p.textContent;
+    }
+  };
+  let textoTotal = "";
+  archivos.reduce(function(prev, f){
+    return prev.then(function(){
+      return leerTextoDeFoto(f, fotoState.tipo).then(function(t){ textoTotal += t + "\n"; hechos++; });
+    });
+  }, Promise.resolve()).then(function(){
+    if(!fotoState) return;
+    fotoState.texto = textoTotal;
+    fotoState.usaOrden = /LLEGADA|ORDEN/.test(ocrNorm(textoTotal));
+    fotoState.filas = ocrInterpretar(textoTotal, fotoState.tipo);
+    renderFotoRevision();
+  }).catch(function(e){
+    if(!fotoState) return;
+    fotoModal('<h2>No se pudo leer la foto</h2><div class="banner">' + String(e && e.message? e.message : e) + '</div>'
+      + '<div class="footnote" style="margin-top:8px">Puedes intentar de nuevo con mejor luz y la lista de frente, o pegar el texto a mano abajo.</div>'
+      + '<div class="field" style="margin-top:8px"><textarea id="foto-texto" rows="5" style="width:100%" placeholder="Pega aqui el texto de la lista"></textarea></div>'
+      + '<div class="row2"><button class="btn-primary" onclick="fotoReinterpretar()">Interpretar este texto</button><button class="btn-ghost" onclick="cerrarFoto()">Cerrar</button></div>');
+  });
+}
+function fotoExiste(f){
+  const lote = currentLote();
+  if(fotoState.tipo==="cont") return lote.contenedores.some(function(c){ return String(c.codigo).toUpperCase().replace(/[\s-]/g,"")===String(f.codigo).toUpperCase().replace(/[\s-]/g,""); });
+  return lote.camiones.some(function(c){ return String(c.placa).toUpperCase().replace(/[\s-]/g,"")===String(f.placa).toUpperCase().replace(/[\s-]/g,""); });
+}
+function renderFotoRevision(){
+  const st = fotoState;
+  st.sinInt = Math.max(0, String(st.texto||"").split(/\r?\n/).filter(function(l){ return ocrNorm(l).length>=8 && /\d{3}/.test(l); }).length - st.filas.length);
+  const esCont = st.tipo==="cont";
+  const lote = currentLote();
+  // duplicados contra el lote y dentro de la misma foto
+  const vistos = {};
+  st.filas.forEach(function(f){
+    const clave = String(esCont? f.codigo : f.placa).toUpperCase().replace(/[\s-]/g,"");
+    f.dup = fotoExiste(f) || !!vistos[clave];
+    vistos[clave] = true;
+    if(f.dup && f._dupMarcado===undefined){ f.incluir = false; f._dupMarcado = true; }
+  });
+  const estilo = 'style="width:100%; padding:8px; border-radius:6px; border:1px solid var(--line); background:var(--bg); color:var(--text); font-family:var(--mono); font-size:14px"';
+  const campo = function(i, lbl, k, val, tipoIn){
+    return '<div><div class="footnote" style="margin:0 0 2px">' + lbl + '</div><input ' + estilo + ' type="' + (tipoIn||"text") + '" value="' + String(val===null||val===undefined? "" : val).replace(/"/g,"&quot;") + '" oninput="fotoEditar(' + i + ',\'' + k + '\',this.value)"></div>';
+  };
+  const tarjetas = st.filas.map(function(f,i){
+    const av = f.avisos.concat(f.dup? ["ya existe en este lote o esta repetido"] : []);
+    return '<div class="ocr-row">'
+      + '<label style="display:flex; align-items:center; gap:8px; font-size:13px; font-weight:600"><input type="checkbox" id="foto-inc-' + i + '" ' + (f.incluir? "checked " : "") + 'onchange="fotoIncluir(' + i + ',this.checked)"> ' + (esCont? "Contenedor " : "Camion ") + (i+1)
+      + (av.length? (' <span class="pill amber">' + av.join(" &middot; ") + '</span>') : ' <span class="pill ok">leido</span>') + '</label>'
+      + '<div class="ocr-grid" style="margin-top:8px">'
+      + (esCont
+          ? campo(i,"Codigo","codigo",f.codigo) + campo(i,"Tara (kg)","tara",f.tara,"number") + campo(i,"Payload (kg)","payload",f.payload,"number")
+          : campo(i,"Placa","placa",f.placa) + campo(i,"Tracto","tracto",f.tracto) + campo(i,"Bultos","bultos",f.bultos,"number") + campo(i,"Peso guia (kg)","peso",f.peso,"number") + campo(i,"Llegada (opcional)","orden",f.orden,"number"))
+      + '</div></div>';
+  }).join("");
+  fotoModal('<h2>Revisa lo que se leyo (' + (esCont? "contenedores" : "camiones") + ')</h2>'
+    + (st.filas.length
+        ? ('<div class="footnote">Encontre <b>' + st.filas.length + '</b> fila(s)' + (st.sinInt>0? (' y <b style="color:var(--amber)">' + st.sinInt + ' linea(s) con numeros que no pude interpretar</b> (mira el texto leido abajo)') : '') + '. Corrige cualquier dato antes de agregar y marca solo las filas que quieres incluir.</div>' + tarjetas)
+        : '<div class="banner">No encontre filas con el formato esperado. Revisa el texto leido abajo, corrigelo y presiona "Volver a interpretar".</div>')
+    + (!esCont? ('<label style="display:flex; gap:8px; align-items:center; font-size:12px; color:var(--text-dim); margin-top:10px"><input type="checkbox" ' + (st.usaOrden? "checked " : "") + 'onchange="fotoUsarOrden(this.checked)"> Usar el N&deg; de la lista como orden de llegada</label>') : '')
+    + '<details style="margin-top:12px"><summary class="footnote" style="cursor:pointer">Ver / corregir el texto leido</summary>'
+    + '<textarea id="foto-texto" rows="6" style="width:100%; margin-top:6px; background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:6px; font-family:var(--mono); font-size:12px; padding:8px">' + String(st.texto).replace(/</g,"&lt;") + '</textarea>'
+    + '<button class="btn-ghost" style="margin-top:6px" onclick="fotoReinterpretar()">Volver a interpretar</button></details>'
+    + '<div id="foto-msg" class="footnote" style="margin-top:8px"></div>'
+    + '<div class="row2" style="margin-top:12px"><button class="btn-primary" id="foto-btn-agregar" onclick="fotoAgregar()">Agregar</button><button class="btn-ghost" onclick="cerrarFoto()">Cancelar</button></div>');
+  fotoActualizarConteo();
+}
+function fotoActualizarConteo(){
+  const b = document.getElementById("foto-btn-agregar");
+  if(!b || !fotoState) return;
+  const n = fotoState.filas.filter(function(f){ return f.incluir; }).length;
+  b.textContent = "Agregar " + n + (fotoState.tipo==="cont"? " contenedor" : " camion") + (n===1? "" : (fotoState.tipo==="cont"? "es" : "es"));
+}
+function fotoEditar(i, campo, valor){
+  const f = fotoState.filas[i];
+  if(campo==="tara" || campo==="payload" || campo==="bultos" || campo==="peso") f[campo] = parseFloat(valor) || 0;
+  else if(campo==="orden") f.orden = (valor===""? null : (parseFloat(valor) || null));
+  else f[campo] = String(valor).trim().toUpperCase();
+}
+function fotoIncluir(i, v){ fotoState.filas[i].incluir = !!v; fotoActualizarConteo(); }
+function fotoUsarOrden(v){
+  fotoState.usaOrden = !!v;
+  fotoState.filas = ocrInterpretar(fotoState.texto, fotoState.tipo);
+  if(!fotoState.usaOrden) fotoState.filas.forEach(function(f){ f.orden = null; });
+  renderFotoRevision();
+}
+function fotoReinterpretar(){
+  const ta = document.getElementById("foto-texto");
+  fotoState.texto = ta? ta.value : fotoState.texto;
+  fotoState.filas = ocrInterpretar(fotoState.texto, fotoState.tipo);
+  renderFotoRevision();
+}
+function fotoAgregar(){
+  const st = fotoState, lote = currentLote();
+  const esCont = st.tipo==="cont";
+  const elegidas = st.filas.filter(function(f){ return f.incluir; });
+  const errores = [];
+  elegidas.forEach(function(f,i){
+    if(esCont){ if(!f.codigo || !(f.payload>0)) errores.push("Contenedor " + (i+1) + ": falta codigo o payload"); }
+    else{ if(!f.placa || !(f.bultos>0) || !(f.peso>0)) errores.push("Camion " + (i+1) + ": falta placa, bultos o peso"); }
+  });
+  const msg = document.getElementById("foto-msg");
+  if(!elegidas.length){ if(msg) msg.innerHTML = '<span style="color:var(--amber)">Marca al menos una fila.</span>'; return; }
+  if(errores.length){ if(msg) msg.innerHTML = '<span style="color:var(--red)">' + errores.join("<br>") + '</span>'; return; }
+  const fEl = document.getElementById("in-fecha-camion");
+  elegidas.forEach(function(f){
+    if(esCont){
+      lote.contenedores.push({codigo:f.codigo, tara:f.tara||0, payload:f.payload, parcial:false, orden:null, cerrado:false, metaManual:null, generado:false, fechas:[]});
+    }else{
+      lote.camiones.push({placa:f.placa, tracto:f.tracto||"", bultos:f.bultos, peso:f.peso, ordenLlegada:(f.orden>0? f.orden : null), fechas:[(fEl && fEl.value)? fEl.value : hoyLocal()]});
+    }
+  });
+  saveApp();
+  renderCamiones(); renderContenedores(); renderResumen();
+  const resultado = document.getElementById(esCont? "bulk-contenedores-resultado" : "bulk-camiones-resultado");
+  if(resultado) resultado.innerHTML = '<span style="color:var(--green)">Se agregaron ' + elegidas.length + (esCont? " contenedor(es)" : " camion(es)") + ' desde la foto.</span>';
+  cerrarFoto();
 }
 
 // Fecha LOCAL (no UTC): en Peru, despues de las 7 pm la fecha UTC ya es la del dia siguiente.
