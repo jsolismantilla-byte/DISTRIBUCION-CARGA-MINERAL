@@ -405,7 +405,7 @@
         <button class="btn-export xls" onclick="exportExcel()">Excel (.xlsx)</button>
         <button class="btn-export pdf" onclick="exportPDF()">PDF</button>
       </div>
-      <div class="footnote">Genera el archivo con los camiones, contenedores, el detalle del reparto y el resumen de este lote, listo para enviar o imprimir.</div>
+      <div class="footnote">Reporte para gerencia: 1) contenedores segun orden de llenado, 2) camiones (guia vs COSCO), 3) placas por contenedor, con totales, y una interpretacion de la operacion (resumen, forma de trabajo y fortalezas). El Excel incluye ademas un anexo operativo.</div>
     </div>
     <div class="card">
       <h2>Resumen por contenedor - peso bascula COSCO</h2>
@@ -428,7 +428,7 @@
 
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf@4.2.1/dist/jspdf.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@5.0.8/dist/jspdf.plugin.autotable.min.js"></script>
 <script>
@@ -2528,57 +2528,454 @@ const ARRASTRE_HEADERS = ["Llegada","Placa","Tracto","Bultos Camion","Peso Guia 
 const RESUMEN_HEADERS = ["Codigo","Tara (kg)","Payload (kg)","Bultos","Peso COSCO Acum. (kg)",
   "Peso Bruto Estimado (kg)","% Llenado","Estado"];
 
-function hoyISO(){ return new Date().toISOString().slice(0,10); }
-function slug(s){ return (s||"lote").toString().trim().replace(/[^a-zA-Z0-9-_]+/g,"_"); }
+// ---------------------------------------------------------------
+// REPORTE PARA GERENCIA (Excel y PDF)
+// ---------------------------------------------------------------
+function reporteNum(v){ return (v!==undefined && v!==null && v!=="" && !isNaN(v))? parseFloat(v) : null; }
+function reporteDec(n, d){ return (n===null || n===undefined || isNaN(n))? "-" : Number(n).toLocaleString("es-PE", {minimumFractionDigits:d, maximumFractionDigits:d}); }
+function reporteSigno(n, d){ return (n>=0? "+" : "") + reporteDec(n, d||0); }
 
-function exportExcel(){
+function buildReporteData(){
   const lote = currentLote();
-  if(lote.camiones.length===0){ alert("Agrega al menos un camion antes de exportar."); return; }
-  if(typeof XLSX === "undefined"){
-    alert("No se pudo cargar el modulo de Excel. Verifica tu conexion a internet e intenta de nuevo.");
-    return;
-  }
-  const targets = computeTargets();
-  const enteroRanks = getEnteroRanks(lote);
-  const parcialRanks = getParcialRanks(lote);
-  const llegadaRanks = getLlegadaRanks(lote);
-  const wb = XLSX.utils.book_new();
+  const dist = computeDistribution();
+  const arrival = getArrivalOrder(lote);
+  const bultosReales = lote.bultosReales || {};
+  const porCont = {};
+  lote.contenedores.forEach(function(c,i){ porCont[i] = []; });
+  const rankMin = {};
+  let bultosPorBajar = 0;
+  const camiones = [];
 
-  const wsInfo = XLSX.utils.aoa_to_sheet([
-    ["Booking", lote.booking||""],
-    ["Cliente", lote.cliente||""],
-    ["Fecha de exportacion", new Date().toLocaleString("es-PE")]
-  ]);
-  XLSX.utils.book_append_sheet(wb, wsInfo, "Lote");
-
-  const wsCamiones = XLSX.utils.aoa_to_sheet([
-    ["Orden llegada","Placa","Tracto","Bultos","Peso Neto Guia (kg)","Peso Promedio/Bulto (kg)"]
-  ].concat(lote.camiones.map(function(c,i){
-    return [llegadaRanks[i], c.placa, c.tracto||"", c.bultos, c.peso, c.bultos? Math.round(c.peso/c.bultos*10)/10 : ""];
-  })));
-  XLSX.utils.book_append_sheet(wb, wsCamiones, "Camiones");
-
-  const wsCont = XLSX.utils.aoa_to_sheet([
-    ["Codigo","Tipo","Nº dentro de su tipo","Tara (kg)","Payload (kg)","Meta (kg)"]
-  ].concat(lote.contenedores.map(function(c,i){
-    const tipo = c.parcial? "PARCIAL":"ENTERO";
-    const numero = c.parcial? (parcialRanks[i]||"") : (enteroRanks[i]||"");
-    return [c.codigo, tipo, numero, c.tara, c.payload, Math.round(targets[i]||0)];
-  })));
-  XLSX.utils.book_append_sheet(wb, wsCont, "Contenedores");
-
-  const wsArr = XLSX.utils.aoa_to_sheet([ARRASTRE_HEADERS].concat(buildArrastreRows()));
-  XLSX.utils.book_append_sheet(wb, wsArr, "Arrastre");
-
-  const resumenRows = computeResumenContenedores().map(function(f){
-    return [f.codigo, f.tara, f.payload, f.bultos, Math.round(f.cosco), Math.round(f.bruto), Math.round(f.pct*10)/10 + "%", f.estadoTxt];
+  arrival.forEach(function(camIdx){
+    const cam = lote.camiones[camIdx];
+    const info = dist.perCamion[camIdx];
+    let coscoCam = 0, nPesadas = 0, hayPend = false;
+    info.splits.forEach(function(s){
+      const key = camIdx+"_"+s.contIdx;
+      if(rankMin[s.contIdx]===undefined || info.arrivalRank<rankMin[s.contIdx]) rankMin[s.contIdx] = info.arrivalRank;
+      const cv = s.settled? reporteNum(lote.cosco[key]) : null;
+      if(s.settled){ coscoCam += cv||0; nPesadas++; }
+      if(s.settled || s.bajado){
+        const br = reporteNum(bultosReales[key]);
+        porCont[s.contIdx].push({camIdx:camIdx, placa:cam.placa, tracto:cam.tracto||"", bultos:(br!==null && br>0)? br : s.bultos, cosco:cv, rank:info.arrivalRank});
+      }else{ hayPend = true; bultosPorBajar += s.bultos; }
+    });
+    bultosPorBajar += info.sobranteBultos||0;
+    const completo = info.splits.length>0 && !hayPend && (info.sobranteBultos||0)===0 && info.splits.every(function(s){ return s.settled; });
+    const dif = completo? (coscoCam - (cam.peso||0)) : null;
+    camiones.push({n:info.arrivalRank, placa:cam.placa, tracto:cam.tracto||"", bultos:cam.bultos||0, guia:cam.peso||0,
+      cosco:(nPesadas>0? coscoCam : null), completo:completo, dif:dif, difPct:(completo && cam.peso)? dif/cam.peso*100 : null});
   });
-  const wsRes = XLSX.utils.aoa_to_sheet([RESUMEN_HEADERS].concat(resumenRows));
-  XLSX.utils.book_append_sheet(wb, wsRes, "Resumen Contenedores");
 
-  XLSX.writeFile(wb, "arrastre_" + slug(lote.booking) + "_" + hoyISO() + ".xlsx");
+  const filas = lote.contenedores.map(function(c,idx){
+    const lst = porCont[idx];
+    const bultos = lst.reduce(function(a,x){ return a+x.bultos; },0);
+    const cosco = lst.reduce(function(a,x){ return a+(x.cosco||0); },0);
+    return {idx:idx, codigo:c.codigo, tipo:(c.parcial? "PARCIAL":"ENTERO"), tara:c.tara||0, payload:c.payload||0,
+      bultos:bultos, cosco:(lst.some(function(x){ return x.cosco!==null; })? cosco : null),
+      sinPesar:lst.filter(function(x){ return x.cosco===null; }).length,
+      uso:((c.payload>0 && lst.length)? cosco/c.payload*100 : null),
+      rank:(rankMin[idx]===undefined? Infinity : rankMin[idx]),
+      orden:((c.orden!==null && c.orden!==undefined && c.orden!=="")? c.orden : 9999),
+      usado:lst.length>0, placas:lst.slice().sort(function(a,b){ return a.rank-b.rank; })};
+  });
+  // Orden de llenado: por la primera unidad que cargo en cada contenedor (entero antes que parcial en empates)
+  const usados = filas.filter(function(f){ return f.usado; }).sort(function(a,b){
+    if(a.rank!==b.rank) return a.rank-b.rank;
+    if(a.tipo!==b.tipo) return a.tipo==="ENTERO"? -1 : 1;
+    if(a.orden!==b.orden) return a.orden-b.orden;
+    return a.idx-b.idx;
+  });
+  const sinUso = filas.filter(function(f){ return !f.usado; });
+  const contenedores = usados.concat(sinUso);
+  contenedores.forEach(function(f,i){ f.n = i+1; });
+
+  const totC = {
+    bultos: usados.reduce(function(a,f){ return a+f.bultos; },0),
+    cosco: usados.reduce(function(a,f){ return a+(f.cosco||0); },0),
+    usados: usados.length, enteros: usados.filter(function(f){ return f.tipo==="ENTERO"; }).length
+  };
+  totC.parciales = totC.usados - totC.enteros;
+
+  const completos = camiones.filter(function(c){ return c.completo; });
+  const totK = {
+    bultos: camiones.reduce(function(a,c){ return a+c.bultos; },0),
+    guia: camiones.reduce(function(a,c){ return a+c.guia; },0),
+    cosco: camiones.reduce(function(a,c){ return a+(c.cosco||0); },0),
+    dif: completos.reduce(function(a,c){ return a+c.dif; },0),
+    guiaCompletos: completos.reduce(function(a,c){ return a+c.guia; },0),
+    completos: completos.length, total: camiones.length
+  };
+  totK.difPct = totK.guiaCompletos? totK.dif/totK.guiaCompletos*100 : null;
+
+  const d = {
+    meta:{booking:lote.booking||"-", cliente:lote.cliente||"-", fecha:new Date().toLocaleString("es-PE", {day:"2-digit", month:"2-digit", year:"numeric", hour:"2-digit", minute:"2-digit", hour12:false}), modo:(lote.modo||"pegado"),
+      margen:(lote.margenSeguridad||0), pesoTrabajar:pesoTrabajarLote(lote)},
+    contenedores:contenedores, totC:totC, camiones:camiones, totK:totK, bultosPorBajar:bultosPorBajar
+  };
+  d.kpi = calcularKpiReporte(d);
+  d.analisis = construirAnalisis(d);
+  return d;
 }
 
+function calcularKpiReporte(d){
+  const usados = d.contenedores.filter(function(f){ return f.usado; });
+  const conPesoTodos = usados.filter(function(f){ return f.cosco!==null && f.cosco>0; });
+  // La uniformidad se mide entre los ENTEROS (los parciales reciben los saldos y se reportan aparte).
+  const conPeso = conPesoTodos.filter(function(f){ return f.tipo==="ENTERO"; });
+  const parc = conPesoTodos.filter(function(f){ return f.tipo==="PARCIAL"; });
+  const refPeso = conPeso.length? conPeso : conPesoTodos;
+  const vals = refPeso.map(function(f){ return f.cosco; });
+  const n = vals.length;
+  const media = n? vals.reduce(function(a,b){ return a+b; },0)/n : 0;
+  const sd = n? Math.sqrt(vals.reduce(function(a,v){ return a+(v-media)*(v-media); },0)/n) : 0;
+  const minF = n? refPeso.reduce(function(m,f){ return f.cosco<m.cosco? f : m; }, refPeso[0]) : null;
+  const maxF = n? refPeso.reduce(function(m,f){ return f.cosco>m.cosco? f : m; }, refPeso[0]) : null;
+  const usos = conPesoTodos.filter(function(f){ return f.payload>0; }).map(function(f){ return f.cosco/f.payload*100; });
+  const descargas = usados.reduce(function(a,f){ return a+f.placas.length; },0);
+  const pesadas = usados.reduce(function(a,f){ return a+(f.placas.length-f.sinPesar); },0);
+  const tol = d.camiones.filter(function(c){ return c.completo && c.guia && Math.abs(c.difPct)<=0.5; }).length;
+  return {
+    bultosEnv:d.totK.bultos, bultosEmb:d.totC.bultos,
+    pctEmb:(d.totK.bultos? d.totC.bultos/d.totK.bultos*100 : 0),
+    pesoGuia:d.totK.guia, pesoCosco:d.totC.cosco,
+    media:media, sd:sd, cv:(media? sd/media*100 : 0), min:minF, max:maxF,
+    usoProm:(usos.length? usos.reduce(function(a,b){ return a+b; },0)/usos.length : 0),
+    usoMax:(usos.length? Math.max.apply(null,usos) : 0),
+    nRef:n, soloEnteros:(conPeso.length>0), parcialesPeso:parc,
+    excedidos:conPesoTodos.filter(function(f){ return f.payload>0 && f.cosco>f.payload; }),
+    cobertura:(descargas? pesadas/descargas*100 : 0), descargas:descargas, pesadas:pesadas,
+    dentroTol:tol, completos:d.totK.completos
+  };
+}
+
+function construirAnalisis(d){
+  const k = d.kpi, m = d.meta;
+  const modoTxt = (m.modo==="pareja")
+    ? ("distribución pareja" + (m.pesoTrabajar>0? (" con un peso de trabajo de " + fmt(m.pesoTrabajar) + " kg por contenedor") : " (peso de las guías entre los contenedores abiertos)"))
+    : ("llenado pegado al payload con un margen de seguridad de " + fmt(m.margen) + " kg");
+  const resumen = "En el booking " + m.booking + " (" + m.cliente + ") se atendieron " + d.totK.total + " unidades, de las cuales " + d.totK.completos
+    + " cerraron su descarga completa. Se embarcaron " + fmt(k.bultosEmb) + " de " + fmt(k.bultosEnv) + " bultos (" + reporteDec(k.pctEmb,1) + "%) en "
+    + d.totC.usados + " contenedores (" + d.totC.enteros + " enteros y " + d.totC.parciales + " parciales), con un peso final de balanza COSCO de "
+    + fmt(k.pesoCosco) + " kg. "
+    + (d.totK.completos>0
+        ? ("En las unidades completas, la balanza COSCO registró " + reporteSigno(d.totK.dif) + " kg frente a la guía (" + reporteSigno(d.totK.difPct,2) + "%).")
+        : "Aún no hay unidades con descarga completa para comparar guía y balanza.");
+  const metodo = [
+    "Se planifica antes de descargar, con " + modoTxt + ". Cada unidad llena un contenedor ENTERO hasta su peso meta y su saldo se asigna a contenedores PARCIAL; todo movimiento es en bigbags completos, nunca en fracciones de kilo.",
+    "Con el peso COSCO de la primera bajada se recalcula el saldo real de la unidad (guía menos COSCO) y su peso por bulto; los parciales solo se completan con saldos exactos y los estimados esperan su pesaje.",
+    "El plan propone ajustes de uno o más bigbags para equilibrar pesos sin superar el payload; la decisión de ejecutarlos es del operador."
+  ];
+  const fort = [];
+  if(k.excedidos.length===0 && k.usoMax>0){
+    fort.push("Control del payload: ningún contenedor superó su capacidad (uso máximo " + reporteDec(k.usoMax,1) + "% del payload; uso promedio " + reporteDec(k.usoProm,1) + "%), lo que reduce el riesgo de sobrepeso y de reproceso en patio.");
+  }else if(k.excedidos.length>0){
+    fort.push("Control del payload: el sistema identificó " + k.excedidos.length + " contenedor(es) sobre su capacidad (" + k.excedidos.map(function(f){ return f.codigo; }).join(", ") + ") y señala cuántos bigbags mover y a qué parcial, evitando detectarlo recién en el cierre.");
+  }
+  if(k.min && k.max){
+    const cvTxt = k.cv<3? "muy uniforme" : (k.cv<6? "uniforme" : "con margen de mejora");
+    fort.push("Uniformidad de pesos: los contenedores " + (k.soloEnteros? "enteros " : "") + "cerraron entre " + fmt(k.min.cosco) + " kg (" + k.min.codigo + ") y " + fmt(k.max.cosco) + " kg (" + k.max.codigo + "), un rango de " + fmt(k.max.cosco-k.min.cosco)
+      + " kg y coeficiente de variación de " + reporteDec(k.cv,1) + "% (" + cvTxt + ")."
+      + (k.parcialesPeso.length? (" Los " + k.parcialesPeso.length + " parcial(es), que reciben los saldos, cerraron entre " + fmt(Math.min.apply(null,k.parcialesPeso.map(function(f){ return f.cosco; }))) + " y " + fmt(Math.max.apply(null,k.parcialesPeso.map(function(f){ return f.cosco; }))) + " kg.") : ""));
+  }
+  fort.push("Trazabilidad: cada bulto queda asociado a una placa, un contenedor y un peso de balanza, lo que permite conciliar guía y COSCO por unidad y por contenedor.");
+  if(d.totK.completos>0){
+    fort.push("Conciliación de balanzas: " + k.dentroTol + " de " + d.totK.completos + " unidades completas quedaron dentro de ±0.5% frente a su guía; la diferencia neta fue de " + reporteSigno(d.totK.dif) + " kg.");
+  }
+  fort.push("Anticipación: el plan asigna todos los bultos antes de bajar y se corrige con el peso real de COSCO; el patio sabe en cada momento qué unidad baja, dónde y cuántos bultos.");
+  const obs = [];
+  if(k.cobertura<99.9 && k.descargas>0) obs.push("Pesaje COSCO registrado en " + k.pesadas + " de " + k.descargas + " descargas (" + reporteDec(k.cobertura,0) + "%): los totales finales se completan al registrar el resto.");
+  if(d.bultosPorBajar>0) obs.push("Quedan " + fmt(d.bultosPorBajar) + " bultos por embarcar según el plan; no forman parte de los totales de este reporte.");
+  const gran = d.camiones.filter(function(c){ return c.completo && c.guia && Math.abs(c.difPct)>1; }).sort(function(a,b){ return Math.abs(b.difPct)-Math.abs(a.difPct); }).slice(0,3);
+  if(gran.length) obs.push("Unidades con diferencia guía-COSCO mayor a 1%: " + gran.map(function(c){ return c.placa + " (" + reporteSigno(c.dif) + " kg, " + reporteSigno(c.difPct,1) + "%)"; }).join("; ") + ". Conviene revisar su pesaje de origen.");
+  if(k.media>0){
+    const bajos = d.contenedores.filter(function(f){ return f.usado && f.tipo==="ENTERO" && f.cosco!==null && f.cosco>0 && f.cosco<k.media*0.9; }).slice(0,3);
+    if(bajos.length) obs.push("Enteros por debajo del 90% del promedio (" + fmt(k.media) + " kg): " + bajos.map(function(f){ return f.codigo + " (" + fmt(f.cosco) + " kg)"; }).join(", ") + ".");
+  }
+  if(obs.length===0) obs.push("Sin observaciones relevantes: la operación cerró conforme al plan.");
+  const indicadores = [
+    ["Bultos embarcados / enviados", fmt(k.bultosEmb) + " / " + fmt(k.bultosEnv) + " (" + reporteDec(k.pctEmb,1) + "%)"],
+    ["Peso total COSCO embarcado", fmt(k.pesoCosco) + " kg"],
+    ["Peso promedio por contenedor", fmt(k.media) + " kg"],
+    ["Rango de pesos finales" + (k.soloEnteros? " (enteros)" : ""), k.min? (fmt(k.min.cosco) + " a " + fmt(k.max.cosco) + " kg") : "-"],
+    ["Coeficiente de variación", k.min? (reporteDec(k.cv,1) + "%") : "-"],
+    ["Uso promedio / máximo del payload", k.min? (reporteDec(k.usoProm,1) + "% / " + reporteDec(k.usoMax,1) + "%") : "-"],
+    ["Contenedores sobre su payload", String(k.excedidos.length)],
+    ["Diferencia neta guía vs COSCO", d.totK.completos? (reporteSigno(d.totK.dif) + " kg (" + reporteSigno(d.totK.difPct,2) + "%)") : "-"],
+    ["Unidades dentro de ±0.5%", d.totK.completos? (k.dentroTol + " de " + d.totK.completos) : "-"],
+    ["Cobertura de pesaje COSCO", reporteDec(k.cobertura,0) + "% (" + k.pesadas + " de " + k.descargas + " descargas)"]
+  ];
+  return {resumen:resumen, metodo:metodo, fortalezas:fort, observaciones:obs, indicadores:indicadores};
+}
+
+function descargarBlob(nombre, blob){
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = nombre;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(function(){ if(a.parentNode) a.parentNode.removeChild(a); URL.revokeObjectURL(url); }, 1500);
+}
+function reporteNombre(lote, ext){
+  return "Reporte_" + slug(lote.booking) + "_" + slug(lote.cliente) + "_" + hoyISO() + "." + ext;
+}
+
+// ======================= EXCEL (ExcelJS) =======================
+function exportExcel(){
+  const lote = currentLote();
+  if(lote.camiones.length===0){ alert("Agrega al menos un camion antes de exportar."); return Promise.resolve(); }
+  if(typeof ExcelJS === "undefined"){
+    alert("No se pudo cargar el modulo de Excel. Verifica tu conexion a internet e intenta de nuevo.");
+    return Promise.resolve();
+  }
+  const d = buildReporteData();
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "COSCO SHIPPING Ports Chancay Peru S.A.";
+  wb.created = new Date();
+
+  const C = {navy:"FF1F3A5F", band:"FFEAF0F7", zebra:"FFF6F8FB", total:"FFDCE6F1", line:"FFC9D3E0", slate:"FF5B6B7F", teal:"FF2E7D7A",
+             amberBg:"FFFFF4DD", amberTx:"FF9A6B00", white:"FFFFFFFF", ink:"FF22303F"};
+  const borde = function(){ const b = {style:"thin", color:{argb:C.line}}; return {top:b, bottom:b, left:b, right:b}; };
+  const relleno = function(argb){ return {type:"pattern", pattern:"solid", fgColor:{argb:argb}}; };
+  const FUENTE = "Calibri";
+  const subt = "COSCO SHIPPING Ports Chancay Peru S.A.   |   Booking: " + d.meta.booking + "   |   Cliente: " + d.meta.cliente + "   |   " + d.meta.fecha;
+
+  function nuevaHoja(nombre, ncol, anchos, orient, tab){
+    const ws = wb.addWorksheet(nombre, {
+      views:[{showGridLines:false}],
+      properties:{tabColor:{argb:tab||C.navy}},
+      pageSetup:{orientation:orient||"portrait", paperSize:9, fitToPage:true, fitToWidth:1, fitToHeight:0,
+        margins:{left:0.5, right:0.5, top:0.6, bottom:0.7, header:0.3, footer:0.3}, horizontalCentered:true}
+    });
+    ws.columns = anchos.map(function(w){ return {width:w}; });
+    ws.headerFooter.oddFooter = "&L&8Reparto de contenedores - " + d.meta.booking + "&C&8Página &P de &N&R&8&D";
+    return ws;
+  }
+  function titulo(ws, ncol, texto){
+    ws.mergeCells(1,1,1,ncol);
+    const c = ws.getCell(1,1);
+    c.value = texto; c.font = {name:FUENTE, size:15, bold:true, color:{argb:C.white}};
+    c.fill = relleno(C.navy); c.alignment = {vertical:"middle", horizontal:"left", indent:1};
+    ws.getRow(1).height = 30;
+    ws.mergeCells(2,1,2,ncol);
+    const s = ws.getCell(2,1);
+    s.value = subt; s.font = {name:FUENTE, size:9, color:{argb:C.slate}};
+    s.fill = relleno(C.band); s.alignment = {vertical:"middle", horizontal:"left", indent:1};
+    ws.getRow(2).height = 18;
+    ws.getRow(3).height = 8;
+  }
+  function cabecera(ws, fila, textos){
+    textos.forEach(function(t,i){
+      const c = ws.getCell(fila, i+1);
+      c.value = t; c.font = {name:FUENTE, size:10, bold:true, color:{argb:C.white}};
+      c.fill = relleno(C.navy); c.border = borde();
+      c.alignment = {vertical:"middle", horizontal:"center", wrapText:true};
+    });
+    ws.getRow(fila).height = 30;
+  }
+  function celda(ws, fila, col, valor, o){
+    o = o || {};
+    const c = ws.getCell(fila, col);
+    c.value = (valor===undefined || valor===null)? "" : valor;
+    c.font = {name:FUENTE, size:10, bold:!!o.bold, italic:!!o.italic, color:{argb:o.color||C.ink}};
+    if(o.fill) c.fill = relleno(o.fill);
+    c.border = borde();
+    c.alignment = {vertical:"middle", horizontal:o.h||"left", wrapText:!!o.wrap, indent:o.indent||0};
+    if(o.fmt) c.numFmt = o.fmt;
+    return c;
+  }
+  function textoLargo(ws, fila, ncol, texto, o){
+    o = o || {};
+    ws.mergeCells(fila,1,fila,ncol);
+    const c = ws.getCell(fila,1);
+    c.value = texto;
+    c.font = {name:FUENTE, size:o.size||10, bold:!!o.bold, italic:!!o.italic, color:{argb:o.color||C.ink}};
+    if(o.fill) c.fill = relleno(o.fill);
+    c.alignment = {vertical:"top", horizontal:"left", wrapText:true, indent:o.indent||0};
+    const anchoChars = ws.columns.slice(0,ncol).reduce(function(a,col){ return a+(col.width||10); },0);
+    const lineas = Math.max(1, Math.ceil(texto.length/(anchoChars*1.05)));
+    ws.getRow(fila).height = Math.max(o.min||16, lineas*14 + 4);
+  }
+  const NUM = "#,##0", DIF = "+#,##0;-#,##0;0", PCT = "0.0%", DIFPCT = "+0.00;-0.00;0.00";
+
+  // ---------- Hoja: Resumen ----------
+  (function(){
+    const ws = nuevaHoja("Resumen", 6, [30, 24, 18, 18, 18, 18], "portrait", C.teal);
+    titulo(ws, 6, "Reporte de operación de descarga - Reparto en contenedores");
+    let r = 4;
+    const info = [["Booking", d.meta.booking], ["Cliente", d.meta.cliente], ["Fecha de emisión", d.meta.fecha],
+                  ["Modo de reparto", d.meta.modo==="pareja"? "Distribución pareja" : "Pegado al payload"]];
+    info.forEach(function(p){
+      celda(ws, r, 1, p[0], {bold:true, fill:C.band, color:C.navy});
+      ws.mergeCells(r,2,r,6); celda(ws, r, 2, p[1]);
+      for(let c=3;c<=6;c++) ws.getCell(r,c).border = borde();
+      r++;
+    });
+    r++;
+    textoLargo(ws, r, 6, "Indicadores clave", {bold:true, size:12, color:C.navy}); r++;
+    cabecera(ws, r, ["Indicador", "Resultado"]);
+    ws.mergeCells(r,2,r,6);
+    for(let c=3;c<=6;c++) ws.getCell(r,c).border = borde();
+    r++;
+    d.analisis.indicadores.forEach(function(p,i){
+      const f = (i%2? C.zebra : null);
+      celda(ws, r, 1, p[0], {fill:f});
+      ws.mergeCells(r,2,r,6); celda(ws, r, 2, p[1], {bold:true, fill:f, color:C.navy});
+      for(let c=3;c<=6;c++) ws.getCell(r,c).border = borde();
+      r++;
+    });
+    r++;
+    textoLargo(ws, r, 6, "Interpretación de la operación", {bold:true, size:12, color:C.navy}); r++;
+    textoLargo(ws, r, 6, d.analisis.resumen, {fill:C.band, indent:1}); r++; r++;
+    textoLargo(ws, r, 6, "Forma de trabajo", {bold:true, color:C.teal}); r++;
+    d.analisis.metodo.forEach(function(t){ textoLargo(ws, r, 6, "•  " + t, {indent:1}); r++; });
+    r++;
+    textoLargo(ws, r, 6, "Fortalezas de la planeación", {bold:true, color:C.teal}); r++;
+    d.analisis.fortalezas.forEach(function(t){ textoLargo(ws, r, 6, "•  " + t, {indent:1}); r++; });
+    r++;
+    textoLargo(ws, r, 6, "Observaciones", {bold:true, color:C.teal}); r++;
+    d.analisis.observaciones.forEach(function(t){ textoLargo(ws, r, 6, "•  " + t, {indent:1}); r++; });
+  })();
+
+  // ---------- Hoja 1: Contenedores segun orden de llenado ----------
+  (function(){
+    const ws = nuevaHoja("1. Contenedores", 8, [6, 18, 12, 13, 14, 14, 20, 12], "landscape");
+    titulo(ws, 8, "1. Relación de contenedores según orden de llenado");
+    cabecera(ws, 4, ["N°", "Contenedor", "Tipo", "Tara (kg)", "Payload (kg)", "Bultos finales", "Peso COSCO final (kg)", "% del payload"]);
+    let r = 5;
+    d.contenedores.forEach(function(f,i){
+      const z = (i%2? C.zebra : null);
+      const gris = f.usado? C.ink : "FF8A97A8";
+      celda(ws, r, 1, f.n, {h:"center", fill:z, color:gris});
+      celda(ws, r, 2, f.codigo, {bold:true, fill:z, color:gris});
+      celda(ws, r, 3, f.tipo, {h:"center", fill:z, color:gris});
+      celda(ws, r, 4, f.tara, {h:"right", fmt:NUM, fill:z, color:gris});
+      celda(ws, r, 5, f.payload, {h:"right", fmt:NUM, fill:z, color:gris});
+      celda(ws, r, 6, f.usado? f.bultos : "-", {h:"right", fmt:NUM, fill:z, color:gris});
+      celda(ws, r, 7, f.cosco!==null? f.cosco : (f.usado? "Pend. COSCO" : "-"), {h:"right", fmt:NUM, fill:z, color:gris, bold:f.cosco!==null});
+      const exc = (f.uso!==null && f.uso>100);
+      celda(ws, r, 8, f.uso!==null? f.uso/100 : "-", {h:"right", fmt:PCT, fill:(exc? C.amberBg : z), color:(exc? C.amberTx : gris)});
+      ws.getRow(r).height = 18;
+      r++;
+    });
+    const tot = {bold:true, fill:C.total, color:C.navy};
+    ws.mergeCells(r,1,r,5);
+    celda(ws, r, 1, "TOTAL EMBARCADO", Object.assign({h:"right"}, tot));
+    for(let c=2;c<=5;c++) ws.getCell(r,c).border = borde();
+    celda(ws, r, 6, d.totC.bultos, Object.assign({h:"right", fmt:NUM}, tot));
+    celda(ws, r, 7, d.totC.cosco, Object.assign({h:"right", fmt:NUM}, tot));
+    celda(ws, r, 8, "", tot);
+    ws.getRow(r).height = 22;
+    r += 2;
+    textoLargo(ws, r, 8, "Bultos finales = bultos efectivamente descargados en cada contenedor (conteo real cuando fue registrado). Peso COSCO final = suma de los pesos de balanza COSCO de las descargas de ese contenedor. Los contenedores sin carga se listan al final.", {italic:true, size:9, color:C.slate});
+    ws.views = [{showGridLines:false, state:"frozen", ySplit:4}];
+    ws.pageSetup.printTitlesRow = "4:4";
+  })();
+
+  // ---------- Hoja 2: Camiones ----------
+  (function(){
+    const ws = nuevaHoja("2. Camiones", 8, [11, 14, 14, 11, 16, 16, 16, 12], "landscape");
+    titulo(ws, 8, "2. Relación de camiones");
+    cabecera(ws, 4, ["N° llegada", "Placa", "Tracto", "Bultos", "Peso guía (kg)", "Peso COSCO (kg)", "Diferencia (kg)", "Dif. %"]);
+    let r = 5;
+    d.camiones.forEach(function(c,i){
+      const z = (i%2? C.zebra : null);
+      const alerta = (c.completo && c.difPct!==null && Math.abs(c.difPct)>1);
+      celda(ws, r, 1, c.n, {h:"center", fill:z});
+      celda(ws, r, 2, c.placa, {bold:true, fill:z});
+      celda(ws, r, 3, c.tracto, {fill:z});
+      celda(ws, r, 4, c.bultos, {h:"right", fmt:NUM, fill:z});
+      celda(ws, r, 5, c.guia, {h:"right", fmt:NUM, fill:z});
+      celda(ws, r, 6, c.cosco!==null? c.cosco : "Pendiente", {h:"right", fmt:NUM, fill:z, color:(c.cosco!==null? C.ink : "FF8A97A8")});
+      celda(ws, r, 7, c.completo? c.dif : "Pendiente", {h:"right", fmt:DIF, fill:(alerta? C.amberBg : z), color:(alerta? C.amberTx : (c.completo? C.ink : "FF8A97A8")), bold:alerta});
+      celda(ws, r, 8, c.completo? c.difPct : "-", {h:"right", fmt:DIFPCT, fill:(alerta? C.amberBg : z), color:(alerta? C.amberTx : C.ink)});
+      ws.getRow(r).height = 18;
+      r++;
+    });
+    const tot = {bold:true, fill:C.total, color:C.navy};
+    ws.mergeCells(r,1,r,3);
+    celda(ws, r, 1, "TOTALES", Object.assign({h:"right"}, tot));
+    for(let c=2;c<=3;c++) ws.getCell(r,c).border = borde();
+    celda(ws, r, 4, d.totK.bultos, Object.assign({h:"right", fmt:NUM}, tot));
+    celda(ws, r, 5, d.totK.guia, Object.assign({h:"right", fmt:NUM}, tot));
+    celda(ws, r, 6, d.totK.cosco, Object.assign({h:"right", fmt:NUM}, tot));
+    celda(ws, r, 7, d.totK.dif, Object.assign({h:"right", fmt:DIF}, tot));
+    celda(ws, r, 8, d.totK.difPct!==null? d.totK.difPct : "-", Object.assign({h:"right", fmt:DIFPCT}, tot));
+    ws.getRow(r).height = 22;
+    r++;
+    ws.mergeCells(r,1,r,8);
+    celda(ws, r, 1, "Total según guía: " + fmt(d.totK.guia) + " kg   |   Total según peso COSCO: " + fmt(d.totK.cosco) + " kg   |   Total diferencia: " + (d.totK.completos? (reporteSigno(d.totK.dif) + " kg") : "-")
+      + "   (" + d.totK.completos + " de " + d.totK.total + " unidades con descarga completa; la diferencia total se calcula solo sobre ellas)", {italic:true, color:C.slate, wrap:true});
+    for(let c=2;c<=8;c++) ws.getCell(r,c).border = borde();
+    ws.getRow(r).height = 30;
+    r += 2;
+    textoLargo(ws, r, 8, "Diferencia = peso COSCO menos peso guía (negativo: la balanza COSCO registró menos que la guía). Se marcan en ámbar las unidades con diferencia mayor a 1%.", {italic:true, size:9, color:C.slate});
+    ws.views = [{showGridLines:false, state:"frozen", ySplit:4}];
+    ws.pageSetup.printTitlesRow = "4:4";
+  })();
+
+  // ---------- Hoja 3: Contenedores con sus placas ----------
+  (function(){
+    const ws = nuevaHoja("3. Placas por contenedor", 4, [22, 20, 14, 22], "portrait");
+    titulo(ws, 4, "3. Relación de contenedores con las placas que ingresaron");
+    cabecera(ws, 4, ["Placa", "Tracto", "Bultos", "Peso COSCO (kg)"]);
+    let r = 5;
+    d.contenedores.filter(function(f){ return f.usado; }).forEach(function(f){
+      ws.mergeCells(r,1,r,4);
+      celda(ws, r, 1, f.codigo + "   |   " + f.tipo + "   |   Payload " + fmt(f.payload) + " kg", {bold:true, fill:C.band, color:C.navy});
+      for(let c=2;c<=4;c++) ws.getCell(r,c).border = borde();
+      ws.getRow(r).height = 20;
+      r++;
+      f.placas.forEach(function(p){
+        celda(ws, r, 1, p.placa, {bold:true});
+        celda(ws, r, 2, p.tracto||"-", {color:C.slate});
+        celda(ws, r, 3, p.bultos, {h:"right", fmt:NUM});
+        celda(ws, r, 4, p.cosco!==null? p.cosco : "Pendiente", {h:"right", fmt:NUM, color:(p.cosco!==null? C.ink : "FF8A97A8")});
+        ws.getRow(r).height = 17;
+        r++;
+      });
+      const sub = {bold:true, fill:C.zebra, color:C.navy};
+      ws.mergeCells(r,1,r,2);
+      celda(ws, r, 1, "Subtotal " + f.codigo, Object.assign({h:"right"}, sub));
+      ws.getCell(r,2).border = borde();
+      celda(ws, r, 3, f.bultos, Object.assign({h:"right", fmt:NUM}, sub));
+      celda(ws, r, 4, f.cosco!==null? f.cosco : "Pendiente", Object.assign({h:"right", fmt:NUM}, sub));
+      ws.getRow(r).height = 19;
+      r += 2;
+    });
+    const tot = {bold:true, fill:C.total, color:C.navy};
+    ws.mergeCells(r,1,r,2);
+    celda(ws, r, 1, "TOTAL GENERAL", Object.assign({h:"right"}, tot));
+    ws.getCell(r,2).border = borde();
+    celda(ws, r, 3, d.totC.bultos, Object.assign({h:"right", fmt:NUM}, tot));
+    celda(ws, r, 4, d.totC.cosco, Object.assign({h:"right", fmt:NUM}, tot));
+    ws.getRow(r).height = 22;
+    ws.views = [{showGridLines:false, state:"frozen", ySplit:4}];
+    ws.pageSetup.printTitlesRow = "4:4";
+  })();
+
+  // ---------- Anexo operativo: arrastre ----------
+  (function(){
+    const n = ARRASTRE_HEADERS.length;
+    const ws = nuevaHoja("Anexo - Arrastre", n, [9, 12, 12, 9, 13, 24, 10, 13, 13, 13, 10, 11], "landscape", "FF8A97A8");
+    titulo(ws, n, "Anexo operativo - Arrastre de camiones y reparto (estimado vs. COSCO)");
+    cabecera(ws, 4, ARRASTRE_HEADERS);
+    buildArrastreRows().forEach(function(row,i){
+      const z = (i%2? C.zebra : null);
+      row.forEach(function(v,j){
+        celda(ws, 5+i, j+1, v, {h:(j<=2||j===5)? "left" : "right", fill:z, fmt:(typeof v==="number" && j!==0)? NUM : undefined, size:9});
+      });
+    });
+    ws.views = [{showGridLines:false, state:"frozen", ySplit:4}];
+    ws.pageSetup.printTitlesRow = "4:4";
+  })();
+
+  return wb.xlsx.writeBuffer().then(function(buf){
+    descargarBlob(reporteNombre(lote,"xlsx"), new Blob([buf], {type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}));
+  });
+}
+
+// ======================= PDF (jsPDF + autoTable) =======================
 function exportPDF(){
   const lote = currentLote();
   if(lote.camiones.length===0){ alert("Agrega al menos un camion antes de exportar."); return; }
@@ -2586,49 +2983,256 @@ function exportPDF(){
     alert("No se pudo cargar el modulo de PDF. Verifica tu conexion a internet e intenta de nuevo.");
     return;
   }
+  const d = buildReporteData();
   const jsPDF = window.jspdf.jsPDF;
-  const doc = new jsPDF({orientation:"landscape", unit:"pt", format:"a4"});
-  const fecha = new Date().toLocaleDateString("es-PE");
-  const subt = "Booking: " + (lote.booking||"-") + "   |   Cliente: " + (lote.cliente||"-") + "   |   " + fecha;
+  const doc = new jsPDF({orientation:"portrait", unit:"pt", format:"a4"});
+  const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight();
+  const M = 40, AW = W - 2*M;
+  const NAVY = [31,58,95], SLATE = [91,107,127], BAND = [234,240,247], ZEBRA = [246,248,251], TOTAL = [220,230,241],
+        LINE = [201,211,224], TEAL = [46,125,122], AMBER = [154,107,0], AMBERBG = [255,244,221], INK = [34,48,63], GRIS = [138,151,168];
+  const fecha = d.meta.fecha;
 
-  doc.setFontSize(15);
-  doc.text("Arrastre de Camiones y Reparto de Contenedores", 40, 36);
-  doc.setFontSize(9);
-  doc.setTextColor(110);
-  doc.text(subt, 40, 52);
-  doc.setTextColor(0);
+  // ---- portada / encabezado ----
+  doc.setFillColor.apply(doc, NAVY); doc.rect(0, 0, W, 96, "F");
+  doc.setFillColor.apply(doc, TEAL); doc.rect(0, 96, W, 3, "F");
+  doc.setTextColor(255,255,255);
+  doc.setFont("helvetica","normal"); doc.setFontSize(8.5);
+  doc.text("COSCO SHIPPING Ports Chancay Peru S.A.", M, 30);
+  doc.setFont("helvetica","bold"); doc.setFontSize(19);
+  doc.text("Reporte de operación de descarga", M, 56);
+  doc.setFont("helvetica","normal"); doc.setFontSize(10);
+  doc.text("Reparto de carga (bigbags) en contenedores", M, 74);
+  doc.setFontSize(8.5);
+  doc.text("Booking: " + d.meta.booking, W-M, 36, {align:"right"});
+  doc.text("Cliente: " + d.meta.cliente, W-M, 50, {align:"right"});
+  doc.text("Emitido: " + fecha, W-M, 64, {align:"right"});
+  doc.text("Modo: " + (d.meta.modo==="pareja"? "Distribución pareja" : "Pegado al payload"), W-M, 78, {align:"right"});
 
-  doc.autoTable({
-    startY: 64,
-    head: [ARRASTRE_HEADERS],
-    body: buildArrastreRows(),
-    styles:{fontSize:8, cellPadding:4},
-    headStyles:{fillColor:[27,37,48], textColor:255},
-    alternateRowStyles:{fillColor:[245,245,245]}
+  // ---- tarjetas de indicadores ----
+  const k = d.kpi;
+  const tiles = [
+    ["BULTOS EMBARCADOS", fmt(k.bultosEmb), "de " + fmt(k.bultosEnv) + " enviados (" + reporteDec(k.pctEmb,1) + "%)"],
+    ["PESO COSCO FINAL", reporteDec(k.pesoCosco/1000,1) + " t", fmt(k.pesoCosco) + " kg"],
+    ["CONTENEDORES USADOS", String(d.totC.usados), d.totC.enteros + " enteros / " + d.totC.parciales + " parciales"],
+    ["UNIDADES", String(d.totK.total), "completas: " + d.totK.completos + " de " + d.totK.total]
+  ];
+  const tw = (AW - 3*10)/4;
+  tiles.forEach(function(t,i){
+    const x = M + i*(tw+10), y = 114;
+    doc.setFillColor.apply(doc, BAND); doc.rect(x, y, tw, 56, "F");
+    doc.setFillColor.apply(doc, TEAL); doc.rect(x, y, 3, 56, "F");
+    doc.setTextColor.apply(doc, SLATE); doc.setFont("helvetica","bold"); doc.setFontSize(7);
+    doc.text(t[0], x+11, y+14);
+    doc.setTextColor.apply(doc, NAVY); doc.setFontSize(16);
+    doc.text(t[1], x+11, y+34);
+    doc.setTextColor.apply(doc, SLATE); doc.setFont("helvetica","normal"); doc.setFontSize(7.5);
+    doc.text(t[2], x+11, y+48);
   });
 
+  function titSeccion(texto, y){
+    doc.setFont("helvetica","bold"); doc.setFontSize(11.5); doc.setTextColor.apply(doc, NAVY);
+    doc.text(texto, M, y);
+    doc.setDrawColor.apply(doc, LINE); doc.setLineWidth(0.8); doc.line(M, y+5, W-M, y+5);
+    doc.setDrawColor.apply(doc, TEAL); doc.setLineWidth(2); doc.line(M, y+5, M+46, y+5);
+    return y + 14;
+  }
+  const estiloBase = {
+    margin:{left:M, right:M, top:46, bottom:46},
+    styles:{font:"helvetica", fontSize:8.5, cellPadding:{top:4,bottom:4,left:5,right:5}, textColor:INK, lineColor:LINE, lineWidth:0.4, valign:"middle"},
+    headStyles:{fillColor:NAVY, textColor:255, fontStyle:"bold", halign:"center", fontSize:8},
+    alternateRowStyles:{fillColor:ZEBRA},
+    footStyles:{fillColor:TOTAL, textColor:NAVY, fontStyle:"bold", lineColor:NAVY, lineWidth:0.4},
+    showFoot:"lastPage"
+  };
+  function fin(){ return doc.lastAutoTable.finalY; }
+
+  // ---- 1. Contenedores segun orden de llenado ----
+  let y = titSeccion("1. Relación de contenedores según orden de llenado", 198);
+  doc.autoTable(Object.assign({}, estiloBase, {
+    startY: y,
+    head:[["N°","Contenedor","Tipo","Tara (kg)","Payload (kg)","Bultos finales","Peso COSCO final (kg)","% payload"]],
+    body: d.contenedores.map(function(f){
+      return [f.n, f.codigo, f.tipo, fmt(f.tara), fmt(f.payload), f.usado? fmt(f.bultos) : "-",
+              f.cosco!==null? fmt(f.cosco) : (f.usado? "Pend." : "-"), f.uso!==null? reporteDec(f.uso,1)+"%" : "-"];
+    }),
+    foot:[[{content:"TOTAL EMBARCADO", colSpan:5, styles:{halign:"right"}}, fmt(d.totC.bultos), fmt(d.totC.cosco), ""]],
+    columnStyles:{0:{halign:"center", cellWidth:28}, 1:{fontStyle:"bold"}, 2:{halign:"center"}, 3:{halign:"right"}, 4:{halign:"right"}, 5:{halign:"right"}, 6:{halign:"right", fontStyle:"bold"}, 7:{halign:"right"}},
+    didParseCell:function(h){
+      if(h.section==="body"){
+        const f = d.contenedores[h.row.index];
+        if(!f.usado) h.cell.styles.textColor = GRIS;
+        if(h.column.index===7 && f.uso!==null && f.uso>100){ h.cell.styles.fillColor = AMBERBG; h.cell.styles.textColor = AMBER; }
+      }
+      if(h.section==="foot" && h.column.index>=5) h.cell.styles.halign = "right";
+    }
+  }));
+  doc.setFont("helvetica","italic"); doc.setFontSize(7.5); doc.setTextColor.apply(doc, SLATE);
+  doc.text("Bultos finales: bultos descargados en el contenedor. Peso COSCO final: suma de balanza COSCO de sus descargas. Sin carga: se listan al final.", M, fin()+12);
+
+  // ---- 2. Camiones ----
+  y = fin() + 38;
+  if(y > H-170){ doc.addPage(); y = 70; }
+  y = titSeccion("2. Relación de camiones", y);
+  doc.autoTable(Object.assign({}, estiloBase, {
+    startY: y,
+    head:[["N°","Placa","Tracto","Bultos","Peso guía (kg)","Peso COSCO (kg)","Diferencia (kg)","Dif. %"]],
+    body: d.camiones.map(function(c){
+      return [c.n, c.placa, c.tracto||"-", fmt(c.bultos), fmt(c.guia), c.cosco!==null? fmt(c.cosco) : "Pend.",
+              c.completo? reporteSigno(c.dif) : "Pend.", c.completo? reporteSigno(c.difPct,2)+"%" : "-"];
+    }),
+    foot:[[{content:"TOTALES", colSpan:3, styles:{halign:"right"}}, fmt(d.totK.bultos), fmt(d.totK.guia), fmt(d.totK.cosco),
+           d.totK.completos? reporteSigno(d.totK.dif) : "-", d.totK.difPct!==null? reporteSigno(d.totK.difPct,2)+"%" : "-"]],
+    columnStyles:{0:{halign:"center", cellWidth:28}, 1:{fontStyle:"bold"}, 3:{halign:"right"}, 4:{halign:"right"}, 5:{halign:"right"}, 6:{halign:"right"}, 7:{halign:"right"}},
+    didParseCell:function(h){
+      if(h.section==="body"){
+        const c = d.camiones[h.row.index];
+        if((h.column.index===6 || h.column.index===7) && c.completo && c.difPct!==null && Math.abs(c.difPct)>1){ h.cell.styles.fillColor = AMBERBG; h.cell.styles.textColor = AMBER; h.cell.styles.fontStyle = "bold"; }
+        if(!c.completo && h.column.index>=5) h.cell.styles.textColor = GRIS;
+      }
+      if(h.section==="foot" && h.column.index>=3) h.cell.styles.halign = "right";
+    }
+  }));
+  doc.setFont("helvetica","italic"); doc.setFontSize(7.5); doc.setTextColor.apply(doc, SLATE);
+  const nota2 = "Total según guía: " + fmt(d.totK.guia) + " kg  |  Total según COSCO: " + fmt(d.totK.cosco) + " kg  |  Total diferencia: " + (d.totK.completos? (reporteSigno(d.totK.dif) + " kg") : "-")
+    + "  (" + d.totK.completos + " de " + d.totK.total + " unidades completas). Diferencia = COSCO - guía; en ámbar, unidades con más de 1%.";
+  doc.text(doc.splitTextToSize(nota2, AW), M, fin()+12);
+
+  // ---- 3. Placas por contenedor ----
   doc.addPage();
-  doc.setFontSize(15);
-  doc.text("Resumen por Contenedor", 40, 36);
-  doc.setFontSize(9);
-  doc.setTextColor(110);
-  doc.text(subt, 40, 52);
-  doc.setTextColor(0);
-
-  const resumenRows = computeResumenContenedores().map(function(f){
-    return [f.codigo, fmt(f.tara), fmt(f.payload), f.bultos, fmt(f.cosco), fmt(f.bruto), f.pct.toFixed(1)+"%", f.estadoTxt];
+  y = titSeccion("3. Relación de contenedores con las placas que ingresaron", 64);
+  const body3 = [];
+  d.contenedores.filter(function(f){ return f.usado; }).forEach(function(f){
+    body3.push([{content:f.codigo + "   |   " + f.tipo + "   |   Payload " + fmt(f.payload) + " kg", colSpan:4, styles:{fillColor:BAND, textColor:NAVY, fontStyle:"bold", halign:"left"}}]);
+    f.placas.forEach(function(p){
+      body3.push([p.placa, p.tracto||"-", fmt(p.bultos), p.cosco!==null? fmt(p.cosco) : "Pend."]);
+    });
+    body3.push([{content:"Subtotal " + f.codigo, colSpan:2, styles:{halign:"right", fontStyle:"bold", textColor:NAVY, fillColor:ZEBRA}},
+                {content:fmt(f.bultos), styles:{halign:"right", fontStyle:"bold", textColor:NAVY, fillColor:ZEBRA}},
+                {content:f.cosco!==null? fmt(f.cosco) : "Pend.", styles:{halign:"right", fontStyle:"bold", textColor:NAVY, fillColor:ZEBRA}}]);
   });
-  doc.autoTable({
-    startY: 64,
-    head: [RESUMEN_HEADERS],
-    body: resumenRows,
-    styles:{fontSize:9, cellPadding:5},
-    headStyles:{fillColor:[27,37,48], textColor:255},
-    alternateRowStyles:{fillColor:[245,245,245]}
-  });
+  doc.autoTable(Object.assign({}, estiloBase, {
+    startY: y,
+    head:[["Placa","Tracto","Bultos","Peso COSCO (kg)"]],
+    body: body3,
+    alternateRowStyles:{fillColor:[255,255,255]},
+    foot:[[{content:"TOTAL GENERAL", colSpan:2, styles:{halign:"right"}}, fmt(d.totC.bultos), fmt(d.totC.cosco)]],
+    columnStyles:{0:{cellWidth:160, fontStyle:"bold"}, 1:{cellWidth:140}, 2:{halign:"right", cellWidth:90}, 3:{halign:"right"}},
+    didParseCell:function(h){ if(h.section==="foot" && h.column.index>=2) h.cell.styles.halign = "right"; }
+  }));
 
-  doc.save("arrastre_" + slug(lote.booking) + "_" + hoyISO() + ".pdf");
+  // ---- 4. Interpretacion ----
+  doc.addPage();
+  y = titSeccion("Interpretación de la operación", 64);
+  const a = d.analisis;
+  function parrafo(texto, x, yy, ancho, o){
+    o = o || {};
+    doc.setFont("helvetica", o.bold? "bold" : "normal"); doc.setFontSize(o.size||9.2);
+    doc.setTextColor.apply(doc, o.color||INK);
+    const lineas = doc.splitTextToSize(texto, ancho);
+    lineas.forEach(function(l){
+      if(yy > H-56){ doc.addPage(); yy = 64; doc.setFont("helvetica", o.bold? "bold" : "normal"); doc.setFontSize(o.size||9.2); doc.setTextColor.apply(doc, o.color||INK); }
+      doc.text(l, x, yy); yy += (o.lh||12.5);
+    });
+    return yy;
+  }
+  function subtitulo(texto, yy){
+    if(yy > H-90){ doc.addPage(); yy = 64; }
+    doc.setFont("helvetica","bold"); doc.setFontSize(10); doc.setTextColor.apply(doc, TEAL);
+    doc.text(texto, M, yy);
+    return yy + 13;
+  }
+  // resumen ejecutivo en caja
+  const lres = doc.splitTextToSize(a.resumen, AW-24);
+  const hres = lres.length*12 + 14;
+  doc.setFillColor.apply(doc, BAND); doc.rect(M, y, AW, hres, "F");
+  doc.setFillColor.apply(doc, TEAL); doc.rect(M, y, 3, hres, "F");
+  doc.setFont("helvetica","normal"); doc.setFontSize(9.2); doc.setTextColor.apply(doc, INK);
+  lres.forEach(function(l,i){ doc.text(l, M+14, y+14+i*12); });
+  y += hres + 12;
+
+  // grafico: peso COSCO final por contenedor
+  const usadosC = d.contenedores.filter(function(f){ return f.usado && f.cosco!==null; });
+  if(usadosC.length){
+    y = subtitulo("Peso COSCO final por contenedor (orden de llenado)", y);
+    const gx = M+34, gw = AW-40, gh = 84, gy = y+4;
+    const maxV = Math.max.apply(null, usadosC.map(function(f){ return Math.max(f.cosco, f.payload||0); }))*1.06;
+    doc.setDrawColor.apply(doc, LINE); doc.setLineWidth(0.4);
+    doc.setFont("helvetica","normal"); doc.setFontSize(6.5); doc.setTextColor.apply(doc, SLATE);
+    for(let g=0; g<=4; g++){
+      const v = maxV*g/4, yy = gy+gh - gh*g/4;
+      doc.line(gx, yy, gx+gw, yy);
+      doc.text(fmt(v), gx-4, yy+2, {align:"right"});
+    }
+    const bw = gw/usadosC.length;
+    usadosC.forEach(function(f,i){
+      const bh = gh*f.cosco/maxV, bx = gx + i*bw + bw*0.18, bwid = bw*0.64;
+      doc.setFillColor(f.tipo==="PARCIAL"? 143 : 74, f.tipo==="PARCIAL"? 170 : 112, f.tipo==="PARCIAL"? 196 : 160);
+      doc.rect(bx, gy+gh-bh, bwid, bh, "F");
+      if(f.payload>0){
+        const py = gy+gh-gh*f.payload/maxV;
+        doc.setDrawColor.apply(doc, AMBER); doc.setLineWidth(0.9); doc.line(bx-1, py, bx+bwid+1, py);
+      }
+      doc.setFont("helvetica","normal"); doc.setFontSize(5.8); doc.setTextColor.apply(doc, SLATE);
+      doc.text(String(f.codigo).slice(0,13), bx+bwid/2-2, gy+gh+4, {angle:-90});
+    });
+    if(k.media>0){
+      const my = gy+gh-gh*k.media/maxV;
+      doc.setDrawColor.apply(doc, TEAL); doc.setLineWidth(0.8);
+      if(doc.setLineDashPattern) doc.setLineDashPattern([3,2], 0);
+      doc.line(gx, my, gx+gw, my);
+      if(doc.setLineDashPattern) doc.setLineDashPattern([], 0);
+    }
+    y = gy+gh+62;
+    doc.setFont("helvetica","normal"); doc.setFontSize(7); doc.setTextColor.apply(doc, SLATE);
+    doc.text("Azul: entero  |  Celeste: parcial  |  Raya ámbar: payload  |  Línea punteada: promedio de enteros (" + fmt(k.media) + " kg)", gx, y-4);
+    y += 10;
+  }
+
+  // indicadores (dos por fila)
+  y = subtitulo("Indicadores", y);
+  const ind = a.indicadores, filasInd = [];
+  for(let i=0; i<ind.length; i+=2){
+    filasInd.push([ind[i][0], ind[i][1], ind[i+1]? ind[i+1][0] : "", ind[i+1]? ind[i+1][1] : ""]);
+  }
+  doc.autoTable(Object.assign({}, estiloBase, {
+    startY: y,
+    body: filasInd,
+    styles:Object.assign({}, estiloBase.styles, {fontSize:7.8, cellPadding:{top:2.6,bottom:2.6,left:4,right:4}}),
+    columnStyles:{0:{cellWidth:128, textColor:SLATE}, 1:{cellWidth:129, fontStyle:"bold", textColor:NAVY}, 2:{cellWidth:128, textColor:SLATE}, 3:{fontStyle:"bold", textColor:NAVY}},
+    alternateRowStyles:{fillColor:ZEBRA}, showFoot:"never", margin:{left:M, right:M, top:46, bottom:46}
+  }));
+  y = fin() + 14;
+
+  y = subtitulo("Forma de trabajo", y);
+  a.metodo.forEach(function(t){ y = parrafo("•  " + t, M+4, y, AW-8, {lh:11.2, size:8.6}) + 1.5; });
+  y += 3;
+  y = subtitulo("Fortalezas de la planeación", y);
+  a.fortalezas.forEach(function(t){ y = parrafo("•  " + t, M+4, y, AW-8, {lh:11.2, size:8.6}) + 1.5; });
+  y += 3;
+  y = subtitulo("Observaciones", y);
+  a.observaciones.forEach(function(t){ y = parrafo("•  " + t, M+4, y, AW-8, {lh:11.2, size:8.6, color:AMBER}) + 1.5; });
+
+  // ---- encabezado corriente y pie en todas las paginas ----
+  const n = doc.getNumberOfPages();
+  for(let p=1; p<=n; p++){
+    doc.setPage(p);
+    if(p>1){
+      doc.setFont("helvetica","bold"); doc.setFontSize(8); doc.setTextColor.apply(doc, NAVY);
+      doc.text("Reporte de operación de descarga", M, 28);
+      doc.setFont("helvetica","normal"); doc.setTextColor.apply(doc, SLATE);
+      doc.text("Booking " + d.meta.booking + "  |  " + d.meta.cliente, W-M, 28, {align:"right"});
+      doc.setDrawColor.apply(doc, TEAL); doc.setLineWidth(1.2); doc.line(M, 34, W-M, 34);
+    }
+    doc.setDrawColor.apply(doc, LINE); doc.setLineWidth(0.5); doc.line(M, H-34, W-M, H-34);
+    doc.setFont("helvetica","normal"); doc.setFontSize(7.5); doc.setTextColor.apply(doc, SLATE);
+    doc.text("COSCO SHIPPING Ports Chancay Peru S.A.  |  Reparto de contenedores", M, H-22);
+    doc.text("Generado " + fecha + "  |  Página " + p + " de " + n, W-M, H-22, {align:"right"});
+  }
+  descargarBlob(reporteNombre(lote,"pdf"), doc.output("blob"));
 }
+
+function hoyISO(){ return new Date().toISOString().slice(0,10); }
+function slug(s){ return (s||"lote").toString().trim().replace(/[^a-zA-Z0-9-_]+/g,"_"); }
 
 function vaciarLote(){
   if(!confirm("Esto borra los camiones, contenedores y pesos COSCO de este lote (se conserva el booking/cliente). Continuar?")) return;
