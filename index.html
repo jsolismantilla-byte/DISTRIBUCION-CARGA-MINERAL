@@ -327,10 +327,10 @@
           <input id="in-peso-trabajar" type="number" inputmode="numeric" placeholder="ej. 28234" onchange="setPesoTrabajar(this.value)">
         </div>
       </div>
-      <div class="field" id="wrap-parciales-sim" style="margin-top:10px">
+      <div class="field" id="wrap-parciales-sim" style="margin-top:10px; display:none">
         <label>Parciales abiertos a la vez — solo Pegado al payload</label>
-        <input id="in-parcial-sim" type="number" inputmode="numeric" placeholder="3" onchange="setParcialesSim(this.value)">
-        <div class="footnote">Cuantos contenedores PARCIAL reciben saldos al mismo tiempo (el sistema manda cada saldo al que mejor lo acerque a su meta). Con 1 vuelve a ser uno por uno.</div>
+        <input id="in-parcial-sim" type="number" inputmode="numeric" placeholder="1" onchange="setParcialesSim(this.value)">
+        <div class="footnote">Cuantos contenedores PARCIAL reciben saldos al mismo tiempo. Con 1 (recomendado) se completa un parcial a la vez con los siguientes camiones que ya tengan su COSCO de primera bajada, y cada unidad da pocas descargas. Con mas, los saldos se reparten en varios parciales abiertos y una unidad puede terminar dando mas descargas.</div>
       </div>
       <div class="field" style="margin-top:10px">
         <label>Margen de seguridad (kg) — solo aplica en "Pegado al payload"</label>
@@ -679,7 +679,7 @@ function renderModoUI(){
   document.getElementById("btn-modo-pegado-hdr").classList.toggle("active", modo==="pegado");
   document.getElementById("btn-modo-pareja-hdr").classList.toggle("active", modo==="pareja");
   document.getElementById("wrap-peso-trabajar").style.display = (modo==="pareja")? "block" : "none";
-  document.getElementById("wrap-parciales-sim").style.display = (modo==="pegado")? "block" : "none";
+  document.getElementById("wrap-parciales-sim").style.display = "none";
   const origen = origenPareja(lote);
   document.getElementById("btn-origen-auto").classList.toggle("active", origen==="auto");
   document.getElementById("btn-origen-manual").classList.toggle("active", origen==="manual");
@@ -690,10 +690,10 @@ function renderModoUI(){
   document.getElementById("origen-explica").textContent = (origen==="auto")
     ? ("Suma el peso de las guias que aun falta repartir (sin contar lo que ya esta en contenedores cerrados) y lo divide entre los contenedores abiertos" + (abiertos? (" (ahora: " + fmt(total/abiertos) + " kg por contenedor)") : "") + ". Usalo cuando ya tienes todos los camiones del lote.")
     : "Todos los contenedores que agregues (ahora y despues) trabajan a este peso, sin pasar nunca su payload. Sirve cuando aun no tienes todos los camiones. Si un contenedor tiene su propio peso a trabajar, ese manda.";
-  document.getElementById("in-parcial-sim").value = lote.parcialesSimultaneos || 3;
+  document.getElementById("in-parcial-sim").value = lote.parcialesSimultaneos || 1;
   document.getElementById("modo-explica").textContent = modo==="pareja"
-    ? "Distribucion pareja: cada camion llena su ENTERO hasta el peso a trabajar y su saldo va a los contenedores marcados como PARCIAL, buscando que todos queden lo mas parejos posible."
-    : "Pegado al payload: cada camion llena su propio contenedor ENTERO (hasta el margen de seguridad); su saldo va SOLO a los contenedores marcados como PARCIAL (los abiertos a la vez), acercando cada uno a su meta con bigbags completos.";
+    ? "Distribucion pareja: cada camion llena su ENTERO hasta el peso a trabajar y su saldo va a los contenedores marcados como PARCIAL, que se completan uno a la vez (pocas descargas por unidad), buscando que todos queden lo mas parejos posible."
+    : "Pegado al payload: cada camion llena su propio contenedor ENTERO (hasta el margen de seguridad); su saldo va SOLO a los contenedores marcados como PARCIAL: se completa un parcial a la vez con los siguientes camiones que ya tengan su COSCO de primera bajada, para que cada unidad dé pocas descargas.";
 }
 
 function showView(name){
@@ -850,11 +850,14 @@ function renderCamiones(){
 
     let descargaHtml = '<div class="footnote">Agrega contenedores para ver aqui su plan de descarga.</div>';
     let difPlaca = '';
+    let descPill = '';
     let hayConfirmadas = false;
     if(dist){
       const info = dist.perCamion[i];
       const settledList = info.splits.filter(function(s){ return s.settled; });
       hayConfirmadas = settledList.length>0;
+      const nDesc = info.splits.length;
+      if(nDesc>0) descPill = ' <span class="pill ' + (nDesc>=4? 'warn' : '') + '" title="Descargas planeadas y hechas de esta unidad (incluida su primera bajada)">' + nDesc + ' descarga' + (nDesc===1? '' : 's') + '</span>';
       const bultosPorBajar = info.splits.filter(function(s){ return !s.settled && !s.bajado; })
         .reduce(function(a,s){ return a+s.bultos; },0) + (info.sobranteBultos||0);
 
@@ -931,7 +934,7 @@ function renderCamiones(){
       : '';
     return '<div class="list-item" style="align-items:flex-start">'
       + '<div class="main">'
-      + '<div class="l1">' + c.placa + (c.tracto? " - "+c.tracto:"") + llegadaPill + difPlaca + '</div>'
+      + '<div class="l1">' + c.placa + (c.tracto? " - "+c.tracto:"") + llegadaPill + descPill + difPlaca + '</div>'
       + '<div class="l2">' + c.bultos + ' bultos - ' + fmt(c.peso) + ' kg guia - ' + fmt(prom) + ' kg/bulto</div>'
       + fechasEditorHtml('cam', i, c.fechas)
       + descargaHtml
@@ -1244,7 +1247,7 @@ function setOrigenPareja(v){
 }
 function setParcialesSim(val){
   const v = parseInt(val,10);
-  currentLote().parcialesSimultaneos = (isNaN(v) || v<1)? 3 : v;
+  currentLote().parcialesSimultaneos = (isNaN(v) || v<1)? 1 : v;
   saveApp();
   renderContenedores();
   renderCamiones();
@@ -1300,7 +1303,7 @@ function renderBalanceBultos(){
   const enviados = lote.camiones.reduce(function(a,c){ return a+(c.bultos||0); },0);
   const pesoEnv = lote.camiones.reduce(function(a,c){ return a+(c.peso||0); },0);
   let bajados = 0, porBajar = 0, piso = 0, pesoDist = 0, pesoPiso = 0, completos = 0;
-  const conPiso = [], conPendiente = [];
+  const conPiso = [], conPendiente = [], muchasDesc = [];
   let pisoEstimado = false;
   if(lote.contenedores.length===0){
     piso = enviados; pesoPiso = pesoEnv;
@@ -1309,6 +1312,7 @@ function renderBalanceBultos(){
     const dist = computeDistribution();
     dist.perCamion.forEach(function(info,i){
       const cam = lote.camiones[i];
+      if(info.splits.length>=4) muchasDesc.push(cam.placa + ' (' + info.splits.length + ')');
       let pend = 0;
       info.splits.forEach(function(s){
         pesoDist += s.peso;
@@ -1337,7 +1341,8 @@ function renderBalanceBultos(){
     html += '<div class="banner" style="margin-top:10px">Los bultos distribuidos (' + distribuidos + ') no coinciden con los enviados (' + enviados + '): revisa los bultos reales que registraste.</div>';
   }
   html += '<div class="footnote" style="margin-top:8px">Camiones con todo su plan cumplido (bajado y asignado): <b>' + completos + '</b> de ' + lote.camiones.length
-    + (conPendiente.length? (' &middot; con bultos aun por bajar: ' + conPendiente.join(', ')) : '') + '.</div>';
+    + (conPendiente.length? (' &middot; con bultos aun por bajar: ' + conPendiente.join(', ')) : '') + '.</div>'
+    + '<div class="footnote" style="margin-top:4px">Descargas por unidad: ' + (muchasDesc.length? ('<b style="color:var(--amber)">' + muchasDesc.length + ' unidad(es) con 4 o mas descargas: ' + muchasDesc.join(', ') + '</b>') : 'ninguna unidad pasa de 3 descargas (primera bajada + hasta 2 parciales).') + '</div>';
   card.innerHTML = html;
 }
 
@@ -1750,7 +1755,8 @@ function computeDistributionCore(){
   const enteroSeq = getOrderedContainers(lote, false);
   const parcialSeq = getOrderedContainers(lote, true);
   const arrival = getArrivalOrder(lote);
-  const maxSim = Math.max(1, parseInt(lote.parcialesSimultaneos,10) || 3);
+  // Siempre se completa UN parcial a la vez (el mas adelantado): asi cada unidad da pocas descargas.
+  const maxSim = 1;
   const minBulto = getMinBulto(lote);
 
   const saldo = {};
@@ -1865,19 +1871,6 @@ function computeDistributionCore(){
   settled.settledSplitsPerTruck.forEach(function(lst){
     lst.forEach(function(s){ if(!s.sinPesar) confirmadoCont[s.contIdx] = true; });
   });
-  // Parciales "abiertos": los primeros N (parcialesSimultaneos) que aun tienen
-  // espacio para al menos un bigbag (y, para saldos estimados, sin peso confirmado).
-  function ventanaParciales(soloSinConfirmar){
-    const v = [];
-    for(let i=0; i<parcialSeq.length && v.length<maxSim; i++){
-      const idx = parcialSeq[i];
-      if(soloSinConfirmar && confirmadoCont[idx]) continue;
-      if(((targets[idx]||0) - saldo[idx]) < minBulto) continue;
-      v.push(idx);
-    }
-    return v;
-  }
-
   const fases = {};
   // FASE 1 (en orden de llegada): traslados, ENTERO propio y saldos que anexaste a mano.
   arrival.forEach(function(camIdx, arrivalRank){
@@ -1923,27 +1916,32 @@ function computeDistributionCore(){
     // 3) Saldo automatico a parciales: se ejecuta en la FASE 2.
     //    - Con peso COSCO de su primera bajada (saldo exacto): completa parciales.
     //    - Sin ese peso (saldo estimado): va a OTRO parcial, sin completar los que ya tienen peso confirmado.
+    // Parciales candidatos para este saldo, EN ORDEN (el mas adelantado primero). Un hueco de solo
+    // 1 bigbag no vale una descarga extra: solo se usa si cabe TODO el saldo ahi.
+    function parcialesParaSaldo(soloSin, S){
+      const v = [];
+      for(let i=0; i<parcialSeq.length && v.length<maxSim; i++){
+        const idx = parcialSeq[i];
+        if(soloSin && confirmadoCont[idx]) continue;
+        if(yaLiquidadoAqui[idx] || pendingSplits.some(function(p){ return p.contIdx===idx; })) continue;
+        const fit = bultosQueEntran(idx,pesoProm);
+        if(fit<1) continue;
+        if(fit<2 && S>fit) continue;
+        v.push(idx);
+      }
+      return v;
+    }
+    // Una unidad completa el parcial en curso con TODO su saldo si cabe (1 descarga). Si no cabe,
+    // lo completa y el resto pasa al siguiente (2 descargas): asi no queda un parcial a medias
+    // esperando al ultimo camion, que terminaria completando varios y dando muchas descargas.
     function saldoAuto(){
       const soloSin = !hayCosco;
       while(bultosPend>=1 && pesoProm>0){
-        const cand = ventanaParciales(soloSin).filter(function(idx){
-          return !yaLiquidadoAqui[idx] && bultosQueEntran(idx,pesoProm)>=1;
-        });
+        const cand = parcialesParaSaldo(soloSin, bultosPend);
         if(!cand.length) break;
-        let elegido = null, mejorSobra = Infinity;
-        cand.forEach(function(idx){
-          if(bultosQueEntran(idx,pesoProm) >= bultosPend){
-            const sobra = ((targets[idx]||0)-saldo[idx]) - bultosPend*pesoProm;
-            if(sobra<mejorSobra){ mejorSobra=sobra; elegido=idx; }
-          }
-        });
-        if(elegido===null){
-          let menorRem = Infinity;
-          cand.forEach(function(idx){
-            const rem = (targets[idx]||0)-saldo[idx];
-            if(rem<menorRem){ menorRem=rem; elegido=idx; }
-          });
-        }
+        let elegido = null;
+        for(let q=0; q<cand.length; q++){ if(bultosQueEntran(cand[q],pesoProm) >= bultosPend){ elegido = cand[q]; break; } }
+        if(elegido===null) elegido = cand[0];
         if(!asignarA(elegido,false)) break;
       }
     }
@@ -1972,13 +1970,14 @@ function computeDistributionCore(){
       const p = info.pesoProm;
       let resto = info.sobranteBultos;
       while(resto>=1){
-        let best = null, bestSaldo = Infinity;
+        let best = null, bestSaldo = Infinity, bestTiene = 2;
         lote.contenedores.forEach(function(c,idx){
           if(!c.parcial || !contAbierto(idx)) return;
           if(!info.primeraConfirmada && confirmadoCont[idx]) return;     // un saldo estimado no completa un parcial confirmado
           if(info.splits.some(function(s){ return s.contIdx===idx && (s.settled||s.bajado); })) return;
           if(Math.floor((c.payload - saldo[idx])/p) < 1) return;
-          if(saldo[idx] < bestSaldo){ bestSaldo = saldo[idx]; best = idx; }
+          const tiene = info.splits.some(function(s){ return s.contIdx===idx && !s.settled && !s.bajado; })? 0 : 1;   // sin descarga extra primero
+          if(tiene<bestTiene || (tiene===bestTiene && saldo[idx]<bestSaldo)){ bestTiene = tiene; bestSaldo = saldo[idx]; best = idx; }
         });
         if(best===null) break;
         const n = Math.min(resto, Math.floor((lote.contenedores[best].payload - saldo[best])/p));
@@ -2026,6 +2025,7 @@ function calcularAutoNivel(lote){
       const info = dist.perCamion[ci];
       if(!info || !info.pesoProm || cam.completo || !info.primeraConfirmada) return;   // saldo exacto: primera bajada con COSCO
       if(vetados[ci+"_"+low]) return;
+      if(info.splits.length>=3) return;                       // ya da 3 descargas: no se le pide otra
       const p = info.pesoProm;
       if(lowDef < p) return;                                   // el faltante no llega ni a un bigbag de esta unidad
       if(info.splits.some(function(s){ return s.contIdx===low; })) return;
@@ -2079,6 +2079,8 @@ function setAutoNivelar(v){
 // para que ningun contenedor quede liviano frente a los demas. Son PROPUESTAS:
 // no se ejecutan hasta que el usuario presiona "Aplicar".
 // ---------------------------------------------------------------
+// Costo (en kg^2 de desbalance) de cada descarga extra que se le pide a una unidad.
+const DROP_PEN = 1.5e6;
 function medirEquilibrio(dist, lote){
   const acum = {};
   lote.contenedores.forEach(function(c,idx){ acum[idx] = 0; });
@@ -2096,7 +2098,9 @@ function medirEquilibrio(dist, lote){
     if(acum[i]<mn){ mn = acum[i]; mnI = i; }
     if(acum[i]>mx){ mx = acum[i]; mxI = i; }
   });
-  return {acum:acum, S:S, mu:mu, v:v, piso:piso, min:(S.length? mn:0), max:(S.length? mx:0), minIdx:mnI, maxIdx:mxI, f:piso*1e12 + v};
+  let drops = 0;
+  dist.perCamion.forEach(function(info){ drops += info.splits.length; });
+  return {acum:acum, S:S, mu:mu, v:v, piso:piso, drops:drops, min:(S.length? mn:0), max:(S.length? mx:0), minIdx:mnI, maxIdx:mxI, f:piso*1e12 + v + DROP_PEN*drops};
 }
 
 let eqCache = {key:null, val:null};
@@ -2157,6 +2161,7 @@ function computeEquilibrioCalc(){
         });
       });
       if(!mejor) break;
+      const descAntes = dist.perCamion[mejor.ci].splits.length;
       lote.traslados[mejor.key] = mejor.base + mejor.k;
       dist = computeDistributionCore();
       const med2 = medirEquilibrio(dist, lote);
@@ -2168,7 +2173,8 @@ function computeEquilibrioCalc(){
       propuestas.push({
         camIdx:mejor.ci, placa:lote.camiones[mejor.ci].placa, contIdx:mejor.b, codigo:lote.contenedores[mejor.b].codigo,
         bultos:mejor.k, bultosTotal:mejor.base+mejor.k, peso:(sp && sp.bultos)? sp.peso/sp.bultos*mejor.k : 0,
-        cambios:cambios, spreadAntes:med.max-med.min, spreadDespues:med2.max-med2.min, pisoAntes:med.piso, pisoDespues:med2.piso
+        cambios:cambios, spreadAntes:med.max-med.min, spreadDespues:med2.max-med2.min, pisoAntes:med.piso, pisoDespues:med2.piso,
+        descAntes:descAntes, descDespues:dist.perCamion[mejor.ci].splits.length
       });
       med = med2; final = med2;
     }
@@ -2210,6 +2216,7 @@ function renderEquilibrio(){
       return '<div class="split" style="margin-top:8px">'
         + '<div class="l2"><b>' + (i+1) + '.</b> Unidad <b>' + p.placa + '</b>: pasar <b>' + p.bultos + ' bulto' + (p.bultos>1?'s':'') + '</b> (~' + fmt(p.peso) + ' kg) al contenedor <b>' + p.codigo + '</b></div>'
         + '<div class="footnote" style="margin-top:2px">' + camb + '</div>'
+        + (p.descDespues!==p.descAntes? ('<div class="footnote" style="margin-top:2px">Descargas de ' + p.placa + ': ' + p.descAntes + ' &rarr; <b>' + p.descDespues + '</b></div>') : '')
         + '<div class="footnote" style="margin-top:2px">Diferencia entre el mas liviano y el mas pesado: ' + fmt(p.spreadAntes) + ' &rarr; <b>' + fmt(p.spreadDespues) + ' kg</b>'
         + (p.pisoAntes>p.pisoDespues? (' &middot; bultos en piso: ' + p.pisoAntes + ' &rarr; ' + p.pisoDespues) : '') + '</div>'
         + '<div style="margin-top:6px"><button class="btn-ghost" style="padding:5px 12px; font-size:12px" onclick="aplicarTraslado(' + p.camIdx + ',' + p.contIdx + ',' + p.bultosTotal + ')">Aplicar</button></div>'
