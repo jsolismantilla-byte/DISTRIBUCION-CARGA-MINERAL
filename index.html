@@ -904,7 +904,7 @@ function renderCamiones(){
           difTxt = '&mdash;' + (db!==0? ('<div class="sub">bultos ' + (db>=0?'+':'') + db + '</div>') : '');
         }
         return '<div class="lin">'
-          + '<div class="cc">' + (cont? cont.codigo:'?') + '<div class="sub">' + tipoTag + ' &middot; ' + (s.settled? 'confirmado' : (s.bajado? 'bajado, sin pesar' : 'pendiente')) + (s.traslado? (s.auto? ' &middot; nivelado auto' : (' &middot; traslado <a href="#" onclick="quitarTraslado(' + i + ',' + s.contIdx + ');return false;" style="color:var(--amber)">quitar</a>')) : (s.manual? ' &middot; anexado':'')) + (s.extra? ' &middot; sobre la meta' : '') + ((s.tipo==='parcial' && !s.settled && !info.primeraConfirmada)? ' &middot; saldo estimado: falta COSCO de su 1a bajada' : '') + '</div></div>'
+          + '<div class="cc">' + (cont? cont.codigo:'?') + '<div class="sub">' + tipoTag + ' &middot; ' + (s.settled? 'confirmado' : (s.bajado? 'bajado, sin pesar' : 'pendiente')) + (s.traslado? (s.auto? ' &middot; nivelado auto' : (' &middot; traslado <a href="#" onclick="quitarTraslado(' + i + ',' + s.contIdx + ');return false;" style="color:var(--amber)">quitar</a>')) : (s.manual? ' &middot; anexado':'')) + (s.extra? ' &middot; sobre la meta' : '') + ((s.tipo==='parcial' && !s.settled && !info.primeraConfirmada)? ' &middot; saldo estimado: falta COSCO de su 1a bajada' : '') + ((s.saltos && s.saltos.length)? (' &middot; <span style="color:var(--amber)">salta ' + s.saltos.map(function(o){ return o.nombre + ' (' + o.motivo + ')'; }).join(', ') + '</span>') : '') + '</div></div>'
           + '<div><input type="number" inputmode="numeric" placeholder="' + estBultos + '" value="' + (brVal!==undefined? brVal:'') + '" onchange="setBultosReal(' + i + ',' + s.contIdx + ',this.value)"></div>'
           + '<div class="num">' + fmt(estPeso) + '</div>'
           + '<div><input type="number" inputmode="decimal" placeholder="kg" value="' + (coscoVal!==undefined? coscoVal:'') + '" onchange="setCosco(' + i + ',' + s.contIdx + ',this.value)"></div>'
@@ -1464,7 +1464,7 @@ function renderContenedores(){
         totBultos += ed.hayBR? ed.br : s.bultos;
         const sub = (s.settled? 'confirmado' : (s.bajado? 'bajado, sin pesar' : 'pendiente'))
           + ((!s.settled && tieneBajada)? (' &middot; ~' + fmt(info.pesoProm) + ' kg/bulto') : '')
-          + (s.traslado? (s.auto? ' &middot; nivelado auto' : (' &middot; traslado <a href="#" onclick="quitarTraslado(' + u.camIdx + ',' + i + ');return false;" style="color:var(--amber)">quitar</a>')) : (s.manual? ' &middot; anexado' : '')) + (s.extra? ' &middot; sobre la meta' : '') + ((s.tipo==='parcial' && !s.settled && !info.primeraConfirmada)? ' &middot; saldo estimado: falta COSCO de su 1a bajada' : '');
+          + (s.traslado? (s.auto? ' &middot; nivelado auto' : (' &middot; traslado <a href="#" onclick="quitarTraslado(' + u.camIdx + ',' + i + ');return false;" style="color:var(--amber)">quitar</a>')) : (s.manual? ' &middot; anexado' : '')) + (s.extra? ' &middot; sobre la meta' : '') + ((s.tipo==='parcial' && !s.settled && !info.primeraConfirmada)? ' &middot; saldo estimado: falta COSCO de su 1a bajada' : '') + ((s.saltos && s.saltos.length)? (' &middot; <span style="color:var(--amber)">salta ' + s.saltos.map(function(o){ return o.nombre + ' (' + o.motivo + ')'; }).join(', ') + '</span>') : '');
         return '<div class="lin">'
           + '<div class="cc">' + cam.placa + '<div class="sub">' + sub + '</div></div>'
           + '<div><input type="number" inputmode="numeric" placeholder="' + estBultos + '" value="' + (brVal!==undefined? brVal:'') + '" onchange="setBultosReal(' + u.camIdx + ',' + i + ',this.value)"></div>'
@@ -1567,8 +1567,17 @@ function ordenConFallback(lista, campo, offset){
   });
 }
 function getArrivalOrder(lote){
-  const conIdx = lote.camiones.map(function(c,idx){ return Object.assign({_idx:idx}, c); });
-  return ordenConFallback(conIdx, "ordenLlegada", 10000).map(function(c){ return c._idx; });
+  const conIdx = lote.camiones.map(function(c,idx){
+    const f = unirFechas(c.fechas)[0] || "";             // sin fecha (datos viejos): se consideran los primeros
+    return Object.assign({_idx:idx, _fecha:f}, c);
+  });
+  return conIdx.slice().sort(function(a,b){
+    if(a._fecha!==b._fecha) return a._fecha<b._fecha? -1 : 1;
+    const va = (a.ordenLlegada!=null && a.ordenLlegada!=="" && !isNaN(a.ordenLlegada))? parseFloat(a.ordenLlegada) : (a._idx+10000);
+    const vb = (b.ordenLlegada!=null && b.ordenLlegada!=="" && !isNaN(b.ordenLlegada))? parseFloat(b.ordenLlegada) : (b._idx+10000);
+    if(va!==vb) return va-vb;
+    return a._idx-b._idx;
+  }).map(function(c){ return c._idx; });
 }
 function getLlegadaRanks(lote){
   const seq = getArrivalOrder(lote);
@@ -1581,13 +1590,19 @@ function getOrderedContainers(lote, wantParcial){
     .filter(function(c){ return c.payload>0 && !c.cerrado && !!c.parcial===wantParcial; });
   return ordenConFallback(conIdx, "orden", 10000).map(function(c){ return c._idx; });
 }
+// Todos los contenedores (abiertos y cerrados) en su orden ascendente de uso.
+function getOrderedContainersTodos(lote, wantParcial){
+  const conIdx = lote.contenedores.map(function(c,idx){ return Object.assign({_idx:idx}, c); })
+    .filter(function(c){ return c.payload>0 && !!c.parcial===wantParcial; });
+  return ordenConFallback(conIdx, "orden", 10000).map(function(c){ return c._idx; });
+}
 function getEnteroRanks(lote){
-  const seq = getOrderedContainers(lote, false);
-  const r = {}; seq.forEach(function(idx,i){ r[idx]=i+1; }); return r;
+  const seq = getOrderedContainersTodos(lote, false);
+  const r = {}; seq.forEach(function(idx,i){ r[idx] = (lote.contenedores[idx].orden!=null && lote.contenedores[idx].orden!=="" && !isNaN(lote.contenedores[idx].orden))? lote.contenedores[idx].orden : (i+1); }); return r;
 }
 function getParcialRanks(lote){
-  const seq = getOrderedContainers(lote, true);
-  const r = {}; seq.forEach(function(idx,i){ r[idx]=i+1; }); return r;
+  const seq = getOrderedContainersTodos(lote, true);
+  const r = {}; seq.forEach(function(idx,i){ r[idx] = (lote.contenedores[idx].orden!=null && lote.contenedores[idx].orden!=="" && !isNaN(lote.contenedores[idx].orden))? lote.contenedores[idx].orden : (i+1); }); return r;
 }
 
 // ---------------------------------------------------------------
@@ -1861,7 +1876,7 @@ function computeDistributionCore(){
     });
     const b = pendingSplits.map(function(s){
       const info = lote.contenedores[s.contIdx];
-      return {contIdx:s.contIdx, peso:s.peso, bultos:s.bultos, settled:false, tipo:(info&&info.parcial)?"parcial":"entero", pesoEstimado:s.peso, manual:!!s.manual, traslado:!!s.traslado, auto:!!s.auto, extra:!!s.extra};
+      return {contIdx:s.contIdx, peso:s.peso, bultos:s.bultos, settled:false, tipo:(info&&info.parcial)?"parcial":"entero", pesoEstimado:s.peso, manual:!!s.manual, traslado:!!s.traslado, auto:!!s.auto, extra:!!s.extra, saltos:(s.saltos||[])};
     });
     return a.concat(b);
   }
@@ -1961,28 +1976,35 @@ function computeDistributionCore(){
     // 3) Saldo automatico a parciales: se ejecuta en la FASE 2.
     //    - Con peso COSCO de su primera bajada (saldo exacto): completa parciales.
     //    - Sin ese peso (saldo estimado): va a OTRO parcial, sin completar los que ya tienen peso confirmado.
-    // Parciales candidatos para este saldo, EN ORDEN (el mas adelantado primero).
-    // - CON los pesos de su primera bajada (saldo exacto): se CIERRA el parcial en curso con esta unidad, con el
-    //   peso mas cercano a la meta, y recien despues se abre otro.
-    // - SIN esos pesos (saldo estimado): conservador; va a otro parcial y un hueco de 1 bigbag no vale una descarga.
-    function parcialesParaSaldo(soloSin, S){
-      const v = [];
+    // SIEMPRE EN ORDEN ASCENDENTE: el saldo va al parcial abierto mas adelantado (el de menor numero) que
+    // aun tenga espacio. La unidad descarga TODO su saldo ahi si el parcial lo soporta; si esta cerca de la
+    // meta/payload, descarga solo lo que le falta en peso y el resto sigue al siguiente parcial.
+    // - CON los pesos de su primera bajada (saldo exacto): se cierra con el peso mas cercano a la meta.
+    // - SIN esos pesos (saldo estimado): conservador (solo lo que cabe bajo la meta) y el parcial queda
+    //   marcado "con saldo estimado": no se puede cerrar hasta tener el COSCO de esa unidad.
+    // Un parcial solo se salta cuando esta completo, ya bajo ahi esta misma unidad, o no le cabe ni un bigbag.
+    function parcialesParaSaldo(){
+      const v = [], omit = [];
       for(let i=0; i<parcialSeq.length && v.length<maxSim; i++){
         const idx = parcialSeq[i];
-        if(soloSin && confirmadoCont[idx]) continue;
-        if(yaLiquidadoAqui[idx] || pendingSplits.some(function(p){ return p.contIdx===idx; })) continue;
+        const nom = lote.contenedores[idx].codigo;
+        if(yaLiquidadoAqui[idx]){ omit.push({idx:idx, nombre:nom, motivo:"esta unidad ya bajo ahi"}); continue; }
+        if(pendingSplits.some(function(p){ return p.contIdx===idx; })){ omit.push({idx:idx, nombre:nom, motivo:"ya tiene su descarga ahi"}); continue; }
         const fit = hayCosco? cabenEnCierre(idx,pesoProm) : bultosQueEntran(idx,pesoProm);
-        if(fit<1) continue;
-        if(!hayCosco && fit<2 && S>fit) continue;
+        if(fit<1){
+          const capEf = Math.min(lote.contenedores[idx].payload, (targets[idx]||0) + (trasKg[idx]||0));
+          omit.push({idx:idx, nombre:nom, motivo:"completo (lleva " + Math.round(saldo[idx]) + " de " + Math.round(capEf) + " kg)"});
+          continue;
+        }
         v.push(idx);
       }
-      return v;
+      return {v:v, omit:omit};
     }
     function saldoAuto(){
-      const soloSin = !hayCosco;
       const modo = hayCosco? "cierre" : undefined;
       while(bultosPend>=1 && pesoProm>0){
-        const cand = parcialesParaSaldo(soloSin, bultosPend);
+        const r = parcialesParaSaldo();
+        const cand = r.v;
         if(!cand.length) break;
         let elegido = null;
         for(let q=0; q<cand.length; q++){
@@ -1991,6 +2013,9 @@ function computeDistributionCore(){
         }
         if(elegido===null) elegido = cand[0];
         if(!asignarA(elegido,false,modo)) break;
+        // por que se salto un parcial anterior (solo los que llaman la atencion)
+        pendingSplits[pendingSplits.length-1].saltos = r.omit.filter(function(o){ return /ya bajo|completo/.test(o.motivo) && !/ya tiene/.test(o.motivo); })
+          .filter(function(o){ return /ya bajo/.test(o.motivo) || ((targets[o.idx]||0) - saldo[o.idx]) >= pesoProm; });
       }
     }
     fases[camIdx] = {
@@ -2018,22 +2043,21 @@ function computeDistributionCore(){
       const p = info.pesoProm;
       let resto = info.sobranteBultos;
       while(resto>=1){
-        let best = null, bestSaldo = Infinity, bestTiene = 2;
-        lote.contenedores.forEach(function(c,idx){
-          if(!c.parcial || !contAbierto(idx)) return;
-          if(!info.primeraConfirmada && confirmadoCont[idx]) return;     // un saldo estimado no completa un parcial confirmado
-          if(info.splits.some(function(s){ return s.contIdx===idx && (s.settled||s.bajado); })) return;
-          if(Math.floor((c.payload - saldo[idx])/p) < 1) return;
-          const tiene = info.splits.some(function(s){ return s.contIdx===idx && !s.settled && !s.bajado; })? 0 : 1;   // sin descarga extra primero
-          if(tiene<bestTiene || (tiene===bestTiene && saldo[idx]<bestSaldo)){ bestTiene = tiene; bestSaldo = saldo[idx]; best = idx; }
-        });
+        let best = null;
+        const ordenAsc = getOrderedContainers(lote, true);
+        for(let q=0; q<ordenAsc.length; q++){
+          const idx = ordenAsc[q], c = lote.contenedores[idx];
+          if(!contAbierto(idx)) continue;
+          if(info.splits.some(function(s){ return s.contIdx===idx && (s.settled||s.bajado); })) continue;
+          if(Math.floor((c.payload - saldo[idx])/p) < 1) continue;
+          best = idx; break;                               // el parcial abierto de menor numero con espacio bajo el payload
+        }
         if(best===null) break;
         const n = Math.min(resto, Math.floor((lote.contenedores[best].payload - saldo[best])/p));
         const exist = info.splits.filter(function(s){ return s.contIdx===best && !s.settled && !s.bajado; })[0];
         if(exist){ exist.bultos += n; exist.peso += n*p; exist.pesoEstimado += n*p; exist.extra = true; }
         else info.splits.push({contIdx:best, peso:n*p, bultos:n, settled:false, bajado:false, tipo:"parcial", pesoEstimado:n*p, manual:false, traslado:false, extra:true});
         saldo[best] += n*p; resto -= n;
-        if(info.primeraConfirmada) confirmadoCont[best] = true;
       }
       info.sobranteBultos = resto; info.sobrante = resto*p;
     });
