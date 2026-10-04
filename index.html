@@ -315,6 +315,7 @@
         <button id="btn-modo-pareja" onclick="setModo('pareja')">Distribucion pareja</button>
       </div>
       <div class="footnote" id="modo-explica"></div>
+      <label style="display:flex; gap:8px; align-items:flex-start; font-size:12px; color:var(--text-dim); margin-top:8px"><input type="checkbox" id="chk-cierre-ajustado" onchange="setCierreAjustado(this.checked)"> <span>Cerrar con el peso mas cercano a la meta: cuando ya tengo los pesos, se acepta hasta medio bigbag sobre la meta (nunca sobre el payload) para no dejar 1 bigbag suelto en otro parcial.</span></label>
       <div class="field" id="wrap-peso-trabajar" style="margin-top:10px">
         <label>Peso a trabajar en Distribucion pareja</label>
         <div class="seg">
@@ -691,6 +692,8 @@ function renderModoUI(){
     ? ("Suma el peso de las guias que aun falta repartir (sin contar lo que ya esta en contenedores cerrados) y lo divide entre los contenedores abiertos" + (abiertos? (" (ahora: " + fmt(total/abiertos) + " kg por contenedor)") : "") + ". Usalo cuando ya tienes todos los camiones del lote.")
     : "Todos los contenedores que agregues (ahora y despues) trabajan a este peso, sin pasar nunca su payload. Sirve cuando aun no tienes todos los camiones. Si un contenedor tiene su propio peso a trabajar, ese manda.";
   document.getElementById("in-parcial-sim").value = lote.parcialesSimultaneos || 1;
+  const chkc = document.getElementById("chk-cierre-ajustado");
+  if(chkc) chkc.checked = (lote.cierreAjustado!==false);
   document.getElementById("modo-explica").textContent = modo==="pareja"
     ? "Distribucion pareja: cada camion llena su ENTERO hasta el peso a trabajar y su saldo va a los contenedores marcados como PARCIAL, que se completan uno a la vez (pocas descargas por unidad), buscando que todos queden lo mas parejos posible."
     : "Pegado al payload: cada camion llena su propio contenedor ENTERO (hasta el margen de seguridad); su saldo va SOLO a los contenedores marcados como PARCIAL: se completa un parcial a la vez con los siguientes camiones que ya tengan su COSCO de primera bajada, para que cada unidad dé pocas descargas.";
@@ -1461,7 +1464,9 @@ function renderContenedores(){
     let faltaPill = '';
     if(rs && c.payload>0 && !c.cerrado){
       if(rs.completo) faltaPill = ' <span class="pill ok">Completo</span>';
-      else if(rs.gap<0) faltaPill = ' <span class="pill warn">Pasa meta +' + fmt(-rs.gap) + ' kg</span>';
+      else if(rs.gap<0) faltaPill = (rs.acum<=c.payload)
+        ? (' <span class="pill amber" title="Se cerro con el peso mas cercano a la meta, sin pasar el payload">Cerrado +' + fmt(-rs.gap) + ' kg sobre la meta (bajo el payload)</span>')
+        : (' <span class="pill warn">Pasa el payload +' + fmt(rs.acum-c.payload) + ' kg</span>');
       else faltaPill = ' <span class="pill amber">Falta ' + fmt(rs.gap) + ' kg' + (rs.gapBultos!==null? (' (~' + rs.gapBultos + ' bultos)') : '') + '</span>';
     }
     let resumenHtml = '';
@@ -1740,6 +1745,17 @@ function calcParcialesNecesarios(totalPeso, P, T){
   return {K:K, parciales:parciales, necesarios:K+parciales};
 }
 
+// Bigbags que se aceptan para CERRAR un contenedor cuando ya se tienen los pesos: se busca el peso mas
+// cercano a la meta (con "ajustado" se acepta hasta medio bigbag sobre la meta), nunca sobre el payload.
+function bultosCierre(payload, meta, acum, p, ajustado){
+  if(!p) return 0;
+  const roomMeta = Math.min(payload, meta) - acum;
+  const roomPay = payload - acum;
+  if(roomMeta<=0 || roomPay<=0) return 0;
+  const porMeta = ajustado? Math.round(roomMeta/p) : Math.floor(roomMeta/p);
+  return Math.max(0, Math.min(porMeta, Math.floor(roomPay/p)));
+}
+
 function getMinBulto(lote){
   let minBulto = Infinity;
   lote.camiones.forEach(function(c){
@@ -1775,6 +1791,10 @@ function computeDistributionCore(){
   }
   // Bultos ENTEROS que aun caben en un contenedor sin pasar su meta.
   const trasKg = {};   // kg que llegan a cada contenedor por traslados aplicados (suman sobre la meta)
+  const cierreAjustado = (lote.cierreAjustado!==false);
+  function cabenEnCierre(idx, pesoProm){
+    return bultosCierre(lote.contenedores[idx].payload, (targets[idx]||0) + (trasKg[idx]||0), saldo[idx], pesoProm, cierreAjustado);
+  }
   function bultosQueEntran(idx, pesoProm){
     if(!pesoProm) return 0;
     const capEf = Math.min(lote.contenedores[idx].payload, (targets[idx]||0) + (trasKg[idx]||0));
@@ -1823,7 +1843,7 @@ function computeDistributionCore(){
     });
     const b = pendingSplits.map(function(s){
       const info = lote.contenedores[s.contIdx];
-      return {contIdx:s.contIdx, peso:s.peso, bultos:s.bultos, settled:false, tipo:(info&&info.parcial)?"parcial":"entero", pesoEstimado:s.peso, manual:!!s.manual, traslado:!!s.traslado, auto:!!s.auto};
+      return {contIdx:s.contIdx, peso:s.peso, bultos:s.bultos, settled:false, tipo:(info&&info.parcial)?"parcial":"entero", pesoEstimado:s.peso, manual:!!s.manual, traslado:!!s.traslado, auto:!!s.auto, extra:!!s.extra};
     });
     return a.concat(b);
   }
@@ -1886,12 +1906,19 @@ function computeDistributionCore(){
     settledSplits.forEach(function(s){ yaLiquidadoAqui[s.contIdx] = true; });
     fijos[camIdx].forEach(function(f){ pendingSplits.push(f); bultosPend -= f.bultos; });
 
-    function asignarA(idx, manual){
+    // modo: (nada) = solo lo que cabe bajo la meta | "cierre" = lo mas cercano a la meta (puede pasarla hasta
+    // medio bigbag, sin pasar el payload) | "todo" = igual que "cierre" pero solo si asi entra TODO lo que falta.
+    function asignarA(idx, manual, modo){
       if(bultosPend<1 || pesoProm<=0 || yaLiquidadoAqui[idx] || pendingSplits.some(function(p){ return p.contIdx===idx; })) return false;
-      const n = Math.min(bultosPend, bultosQueEntran(idx,pesoProm));
+      let maxN = bultosQueEntran(idx,pesoProm);
+      if(modo==="cierre") maxN = cabenEnCierre(idx,pesoProm);
+      else if(modo==="todo"){ const nc = cabenEnCierre(idx,pesoProm); if(bultosPend<=nc) maxN = nc; }
+      const n = Math.min(bultosPend, maxN);
       if(n<1) return false;
       const peso = n*pesoProm;
-      pendingSplits.push({contIdx:idx, peso:peso, bultos:n, manual:!!manual});
+      const capEf = Math.min(lote.contenedores[idx].payload, (targets[idx]||0) + (trasKg[idx]||0));
+      const sobreMeta = (saldo[idx] + peso) > capEf + 0.5;
+      pendingSplits.push({contIdx:idx, peso:peso, bultos:n, manual:!!manual, extra:sobreMeta});
       saldo[idx] += peso; bultosPend -= n;
       if(hayCosco && lote.contenedores[idx].parcial) confirmadoCont[idx] = true;
       return true;
@@ -1906,7 +1933,7 @@ function computeDistributionCore(){
     }) || (manualEntero && yaLiquidadoAqui[parseInt(ax[0],10)]);
     if(!yaTieneEnteroSettled && bultosPend>=1){
       const enteroContIdx = manualEntero? parseInt(ax[0],10) : siguienteEnteroLibre(camIdx);
-      if(enteroContIdx!==null) asignarA(enteroContIdx, manualEntero);
+      if(enteroContIdx!==null) asignarA(enteroContIdx, manualEntero, "todo");
     }
 
     // 2) Saldos anexados a mano a parciales (decision tuya: se respeta).
@@ -1916,33 +1943,36 @@ function computeDistributionCore(){
     // 3) Saldo automatico a parciales: se ejecuta en la FASE 2.
     //    - Con peso COSCO de su primera bajada (saldo exacto): completa parciales.
     //    - Sin ese peso (saldo estimado): va a OTRO parcial, sin completar los que ya tienen peso confirmado.
-    // Parciales candidatos para este saldo, EN ORDEN (el mas adelantado primero). Un hueco de solo
-    // 1 bigbag no vale una descarga extra: solo se usa si cabe TODO el saldo ahi.
+    // Parciales candidatos para este saldo, EN ORDEN (el mas adelantado primero).
+    // - CON los pesos de su primera bajada (saldo exacto): se CIERRA el parcial en curso con esta unidad, con el
+    //   peso mas cercano a la meta, y recien despues se abre otro.
+    // - SIN esos pesos (saldo estimado): conservador; va a otro parcial y un hueco de 1 bigbag no vale una descarga.
     function parcialesParaSaldo(soloSin, S){
       const v = [];
       for(let i=0; i<parcialSeq.length && v.length<maxSim; i++){
         const idx = parcialSeq[i];
         if(soloSin && confirmadoCont[idx]) continue;
         if(yaLiquidadoAqui[idx] || pendingSplits.some(function(p){ return p.contIdx===idx; })) continue;
-        const fit = bultosQueEntran(idx,pesoProm);
+        const fit = hayCosco? cabenEnCierre(idx,pesoProm) : bultosQueEntran(idx,pesoProm);
         if(fit<1) continue;
-        if(fit<2 && S>fit) continue;
+        if(!hayCosco && fit<2 && S>fit) continue;
         v.push(idx);
       }
       return v;
     }
-    // Una unidad completa el parcial en curso con TODO su saldo si cabe (1 descarga). Si no cabe,
-    // lo completa y el resto pasa al siguiente (2 descargas): asi no queda un parcial a medias
-    // esperando al ultimo camion, que terminaria completando varios y dando muchas descargas.
     function saldoAuto(){
       const soloSin = !hayCosco;
+      const modo = hayCosco? "cierre" : undefined;
       while(bultosPend>=1 && pesoProm>0){
         const cand = parcialesParaSaldo(soloSin, bultosPend);
         if(!cand.length) break;
         let elegido = null;
-        for(let q=0; q<cand.length; q++){ if(bultosQueEntran(cand[q],pesoProm) >= bultosPend){ elegido = cand[q]; break; } }
+        for(let q=0; q<cand.length; q++){
+          const cap = hayCosco? cabenEnCierre(cand[q],pesoProm) : bultosQueEntran(cand[q],pesoProm);
+          if(cap >= bultosPend){ elegido = cand[q]; break; }
+        }
         if(elegido===null) elegido = cand[0];
-        if(!asignarA(elegido,false)) break;
+        if(!asignarA(elegido,false,modo)) break;
       }
     }
     fases[camIdx] = {
@@ -2065,6 +2095,12 @@ function computeDistribution(){
   return dist;
 }
 
+function setCierreAjustado(v){
+  currentLote().cierreAjustado = !!v;
+  saveApp();
+  renderContenedores();
+  renderCamiones();
+}
 function setAutoNivelar(v){
   currentLote().autoNivelar = !!v;
   saveApp();
@@ -2262,7 +2298,7 @@ function computeSugerencias(dist){
       const pendOtros = saldoSplits.reduce(function(a,s){ return a+s.bultos; },0) + (info.sobranteBultos||0);
       if(pendOtros<1) return;
       const p = info.pesoProm;
-      const maxK = Math.min(pendOtros, Math.floor((meta-acum)/p));
+      const maxK = Math.min(pendOtros, (ref===null && info.primeraConfirmada)? bultosCierre(lote.contenedores[idx].payload, meta, acum, p, lote.cierreAjustado!==false) : Math.floor((meta-acum)/p));
       if(maxK<1) return;
       let k = maxK;
       if(ref!==null){
