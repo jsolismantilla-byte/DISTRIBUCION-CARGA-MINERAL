@@ -208,6 +208,105 @@
   .radio-opt input{margin-top:3px;}
   .radio-opt .t{font-size:13px; font-weight:600;}
   .radio-opt .d{font-size:11.5px; color:var(--text-dim); margin-top:2px;}
+
+  /* ===== TEMA VERDE PROFESIONAL (bigbags / puerto) ===== */
+  :root{
+    --bg:#06150E;
+    --surface:#0E2619;
+    --surface-2:#133322;
+    --line:#1F4A33;
+    --text:#ECFAF2;
+    --text-dim:#8FB8A2;
+    --accent:#1FE07A;
+    --accent-2:#00B35C;
+    --accent-ink:#022412;
+    --green:#2EE58A;
+    --green-dim:#0E3D26;
+    --amber:#FFB830;
+    --amber-dim:#4A3610;
+    --blue:#56B8FF;
+    --blue-dim:#12354D;
+    --glow:0 0 0 1px rgba(31,224,122,.18), 0 8px 24px rgba(0,0,0,.35);
+  }
+  html,body{
+    background:
+      radial-gradient(900px 500px at 85% -10%, rgba(31,224,122,.16), transparent 60%),
+      radial-gradient(700px 500px at -10% 110%, rgba(0,179,92,.14), transparent 60%),
+      linear-gradient(165deg,#031009 0%,#082317 48%,#05140d 100%) fixed;
+  }
+  body::before{
+    content:""; position:fixed; inset:0; z-index:0; pointer-events:none; opacity:.9;
+    background-image:url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220' viewBox='0 0 220 220'%3E%3Cg fill='none' stroke='%231FE07A' stroke-opacity='.075' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M62 78c-6-30 4-44 16-44M118 78c6-30-4-44-16-44M78 34c8 8 16 8 24 0'/%3E%3Cpath d='M56 78h68l6 10v62c0 6-4 10-10 10H60c-6 0-10-4-10-10V88z'/%3E%3Cpath d='M50 100h80M50 138h80M72 78v82M108 78v82' stroke-opacity='.04'/%3E%3Cpath d='M78 160v12h24v-12'/%3E%3C/g%3E%3Cg fill='none' stroke='%231FE07A' stroke-opacity='.05' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' transform='translate(120 0) scale(.55) translate(70 190)'%3E%3Cpath d='M62 78c-6-30 4-44 16-44M118 78c6-30-4-44-16-44'/%3E%3Cpath d='M56 78h68l6 10v62c0 6-4 10-10 10H60c-6 0-10-4-10-10V88z'/%3E%3C/g%3E%3C/svg%3E");
+    background-size:220px 220px;
+    -webkit-mask-image:linear-gradient(180deg,#000 0%,rgba(0,0,0,.55) 70%,rgba(0,0,0,.25) 100%);
+            mask-image:linear-gradient(180deg,#000 0%,rgba(0,0,0,.55) 70%,rgba(0,0,0,.25) 100%);
+  }
+  #pantalla-lotes,#pantalla-app{position:relative; z-index:1;}
+
+  header{
+    background:linear-gradient(135deg,#0A3A24 0%,#0B5A34 55%,#0A7A44 100%);
+    border-bottom:1px solid rgba(31,224,122,.35);
+    box-shadow:0 6px 22px rgba(0,0,0,.4);
+  }
+  header h1{display:flex; align-items:center; gap:9px; letter-spacing:.3px;}
+  header h1::before, #pantalla-lotes h1::before{
+    content:""; width:26px; height:26px; flex:none; border-radius:8px;
+    background:#1FE07A url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32' fill='none' stroke='%23022412' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 11c-2-5 0-7 3-7M22 11c2-5 0-7-3-7M13 4c2 2 4 2 6 0'/%3E%3Cpath d='M9 11h14l1.5 2.5V24c0 1.2-.9 2-2 2H9.5c-1.100 0-2-.8-2-2V13.500z'/%3E%3Cpath d='M13 26v3h6v-3'/%3E%3C/svg%3E") center/20px no-repeat;
+    box-shadow:0 0 14px rgba(31,224,122,.55);
+  }
+  #pantalla-lotes h1{display:flex; align-items:center; gap:10px; font-size:20px;}
+  header .lote-info{color:#9CFFC8;}
+  header .totales b{color:#6DFFAE;}
+  header .btn-cambiar, .btn-cambiar{
+    background:rgba(255,255,255,.07); border-color:rgba(109,255,174,.4); color:#D8FFEA;
+  }
+
+  .card, .lote-card, .ocr-sheet{
+    background:linear-gradient(160deg,rgba(21,56,38,.92),rgba(11,33,22,.92));
+    border:1px solid var(--line); border-radius:14px;
+    box-shadow:0 6px 20px rgba(0,0,0,.28), inset 0 1px 0 rgba(255,255,255,.04);
+  }
+  .card h2{color:#B6F5D2; font-weight:700; letter-spacing:.2px;}
+  .split, .ocr-row{background:rgba(31,224,122,.06); border:1px solid rgba(31,224,122,.12);}
+  .field input,.field select,.field textarea{
+    background:rgba(3,16,9,.55); border-color:var(--line);
+  }
+  .field input:focus,.field select:focus,.field textarea:focus,.lin input:focus,.split .vals input:focus{
+    outline:none; border-color:var(--accent); box-shadow:0 0 0 3px rgba(31,224,122,.22);
+  }
+  .lin input,.split .vals input{background:rgba(3,16,9,.55);}
+
+  .btn-primary, .lote-card .abrir, .seg button.active{
+    background:linear-gradient(135deg,var(--accent) 0%,var(--accent-2) 100%);
+    color:var(--accent-ink); box-shadow:0 4px 14px rgba(31,224,122,.35);
+  }
+  .btn-primary:active,.lote-card .abrir:active{transform:translateY(1px);}
+  .btn-ghost{border-color:rgba(109,255,174,.35); color:#CFF7E0;}
+  .seg{border-color:var(--line);}
+  .seg button{background:rgba(3,16,9,.45);}
+  .btn-export.xls{background:linear-gradient(135deg,#17A55B,#0E7A41);}
+  .btn-export.pdf{background:linear-gradient(135deg,#D4372D,#A3241C);}
+
+  .pill.ok{color:#6DFFAE; background:rgba(31,224,122,.12); border-color:rgba(31,224,122,.35);}
+  .banner{border-radius:10px;}
+
+  nav.tabs{
+    background:linear-gradient(180deg,rgba(8,35,23,.92),rgba(3,16,9,.97));
+    -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px);
+    border-top:1px solid rgba(31,224,122,.3);
+  }
+  nav.tabs button{position:relative;}
+  nav.tabs button .ico svg{width:23px; height:23px; display:block; stroke:currentColor; fill:none; stroke-width:1.9; stroke-linecap:round; stroke-linejoin:round;}
+  nav.tabs button.active{color:var(--accent);}
+  nav.tabs button.active::before{
+    content:""; position:absolute; top:0; left:25%; right:25%; height:3px; border-radius:0 0 4px 4px;
+    background:var(--accent); box-shadow:0 0 12px var(--accent);
+  }
+  th{color:#9FD6B7;}
+  .empty{border-color:var(--line); background:rgba(31,224,122,.03);}
+  .ocr-modal{background:rgba(2,10,6,.9);}
+  #pantalla-lotes .top-row{display:flex; justify-content:space-between; align-items:center; gap:10px;}
+  #pantalla-lotes .btn-cambiar{padding:8px 11px; font-size:12px; border:1px solid rgba(109,255,174,.4); border-radius:9px;}
 </style>
 </head>
 <body>
@@ -449,9 +548,9 @@
 <input type="file" id="in-foto-galeria" accept="image/*" multiple style="display:none" onchange="fotoSeleccionada(this)">
 
 <nav class="tabs">
-  <button class="tab-btn active" data-view="camiones" onclick="showView('camiones')"><span class="ico">&#128666;</span>Camiones</button>
-  <button class="tab-btn" data-view="contenedores" onclick="showView('contenedores')"><span class="ico">&#128230;</span>Contenedores</button>
-  <button class="tab-btn" data-view="resumen" onclick="showView('resumen')"><span class="ico">&#128203;</span>Resumen</button>
+  <button class="tab-btn active" data-view="camiones" onclick="showView('camiones')"><span class="ico"><svg viewBox="0 0 24 24"><path d="M2 6h11v10H2zM13 9h4.5l3 3.500V16H13z"/><circle cx="6.500" cy="17.500" r="1.800"/><circle cx="17" cy="17.500" r="1.800"/></svg></span>Camiones</button>
+  <button class="tab-btn" data-view="contenedores" onclick="showView('contenedores')"><span class="ico"><svg viewBox="0 0 24 24"><path d="M8 7c-1.500-3.500 0-5 2-5M16 7c1.500-3.500 0-5-2-5M10 2.500c1.300 1 2.700 1 4 0"/><path d="M7 7h10l1.200 2v10c0 .9-.7 1.500-1.500 1.500H7.300c-.8 0-1.500-.6-1.500-1.500V9z"/><path d="M6 12h12"/></svg></span>Contenedores</button>
+  <button class="tab-btn" data-view="resumen" onclick="showView('resumen')"><span class="ico"><svg viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V3h6v1M8.500 10h7M8.500 14h7M8.500 18h4"/></svg></span>Resumen</button>
 </nav>
 
 </div>
