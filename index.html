@@ -358,10 +358,29 @@
   nav.tabs button.active{color:#22F083;}
   #fondo-img .rs{right:0; bottom:74px; width:min(520px,100vw);}
   #fondo-img .bb1{left:8px; bottom:300px; width:110px;}
+
+  /* ===== AJUSTE: FONDOS VISIBLES PERO SUTILES ===== */
+  #fondo-img .rs{right:-6px; bottom:auto; top:34vh; width:min(560px,112vw); stroke-width:2.4; opacity:.42;}
+  #fondo-img .bb1{left:-14px; top:calc(34vh + 190px); bottom:auto; width:120px; stroke-width:2.6; opacity:.34;}
+  #fondo-img .bb2{right:6px; top:92px; width:104px; stroke-width:2.6; opacity:.30;}
+  #fondo-img .bb3{left:44px; top:calc(100vh - 170px); width:92px; stroke-width:2.6; opacity:.30;}
+  #fondo-img .bb4{right:34px; top:calc(100vh - 190px); width:78px; stroke-width:2.6; opacity:.26;}
+  .card, .lote-card, .ocr-sheet{
+    background:linear-gradient(160deg,rgba(14,25,20,.80),rgba(8,15,12,.80));
+    -webkit-backdrop-filter:blur(2px); backdrop-filter:blur(2px);
+  }
+  .split, .ocr-row{background:rgba(15,26,21,.78);}
+  .field input,.field select,.field textarea,.lin input,.split .vals input,.fecha-in{background:rgba(0,0,0,.88);}
+  .card h2,.card,.lote-card{text-shadow:0 1px 2px rgba(0,0,0,.9);}
+  body::before{opacity:.35;}
+
+  .card, .lote-card, .ocr-sheet{background:linear-gradient(160deg,rgba(12,22,17,.60),rgba(6,12,9,.60)); -webkit-backdrop-filter:blur(1.5px); backdrop-filter:blur(1.5px);}
+  .split, .ocr-row{background:rgba(15,26,21,.62);}
+  #fondo-img .rs{opacity:.5;} #fondo-img .bb1{opacity:.4;} #fondo-img .bb2{opacity:.36;} #fondo-img .bb3{opacity:.36;} #fondo-img .bb4{opacity:.3;}
 </style>
 </head>
 <body>
-<div id="fondo-img" aria-hidden="true"><svg class="rs" viewBox="0 0 460 240"><path d="M0 214h460" stroke-opacity=".5"/><rect x="60" y="150" width="250" height="24" rx="6"/><path d="M68 150v-44h42l20 20v24"/><path d="M80 114h26l12 12H80z" stroke-opacity=".6"/><circle cx="112" cy="180" r="26"/><circle cx="112" cy="180" r="10"/><circle cx="262" cy="180" r="26"/><circle cx="262" cy="180" r="10"/><path d="M150 138L336 44l12 20L170 154z"/><path d="M200 146l-14 20M168 154l6 10" stroke-opacity=".6"/><path d="M342 54v12M392 54v12M312 66h160"/><rect x="308" y="68" width="150" height="56"/><path d="M326 68v56M344 68v56M362 68v56M380 68v56M398 68v56M416 68v56M434 68v56" stroke-opacity=".55"/></svg><svg class="bb1" viewBox="0 0 120 180"><path d="M30 52C22 22 34 6 50 6M90 52C98 22 86 6 70 6M50 6c6 7 14 7 20 0"/><path d="M22 52h76l8 14v78c0 8-5 14-13 14H27c-8 0-13-6-13-14V66z"/><path d="M14 90h92M14 124h92M44 52v102M76 52v102" stroke-opacity=".5"/><path d="M48 158v14h24v-14"/></svg><svg class="bb2" viewBox="0 0 120 180"><path d="M30 52C22 22 34 6 50 6M90 52C98 22 86 6 70 6M50 6c6 7 14 7 20 0"/><path d="M22 52h76l8 14v78c0 8-5 14-13 14H27c-8 0-13-6-13-14V66z"/><path d="M14 90h92M14 124h92M44 52v102M76 52v102" stroke-opacity=".5"/><path d="M48 158v14h24v-14"/></svg><svg class="bb3" viewBox="0 0 120 180"><path d="M30 52C22 22 34 6 50 6M90 52C98 22 86 6 70 6M50 6c6 7 14 7 20 0"/><path d="M22 52h76l8 14v78c0 8-5 14-13 14H27c-8 0-13-6-13-14V66z"/><path d="M14 90h92M14 124h92M44 52v102M76 52v102" stroke-opacity=".5"/><path d="M48 158v14h24v-14"/></svg></div>
+<div id="fondo-img" aria-hidden="true"><svg class="rs" viewBox="0 0 460 240"><path d="M0 214h460" stroke-opacity=".5"/><rect x="60" y="150" width="250" height="24" rx="6"/><path d="M68 150v-44h42l20 20v24"/><path d="M80 114h26l12 12H80z" stroke-opacity=".6"/><circle cx="112" cy="180" r="26"/><circle cx="112" cy="180" r="10"/><circle cx="262" cy="180" r="26"/><circle cx="262" cy="180" r="10"/><path d="M150 138L336 44l12 20L170 154z"/><path d="M200 146l-14 20M168 154l6 10" stroke-opacity=".6"/><path d="M342 54v12M392 54v12M312 66h160"/><rect x="308" y="68" width="150" height="56"/><path d="M326 68v56M344 68v56M362 68v56M380 68v56M398 68v56M416 68v56M434 68v56" stroke-opacity=".55"/></svg><svg class="bb1" viewBox="0 0 120 180"><path d="M30 52C22 22 34 6 50 6M90 52C98 22 86 6 70 6M50 6c6 7 14 7 20 0"/><path d="M22 52h76l8 14v78c0 8-5 14-13 14H27c-8 0-13-6-13-14V66z"/><path d="M14 90h92M14 124h92M44 52v102M76 52v102" stroke-opacity=".5"/><path d="M48 158v14h24v-14"/></svg><svg class="bb2" viewBox="0 0 120 180"><path d="M30 52C22 22 34 6 50 6M90 52C98 22 86 6 70 6M50 6c6 7 14 7 20 0"/><path d="M22 52h76l8 14v78c0 8-5 14-13 14H27c-8 0-13-6-13-14V66z"/><path d="M14 90h92M14 124h92M44 52v102M76 52v102" stroke-opacity=".5"/><path d="M48 158v14h24v-14"/></svg><svg class="bb3" viewBox="0 0 120 180"><path d="M30 52C22 22 34 6 50 6M90 52C98 22 86 6 70 6M50 6c6 7 14 7 20 0"/><path d="M22 52h76l8 14v78c0 8-5 14-13 14H27c-8 0-13-6-13-14V66z"/><path d="M14 90h92M14 124h92M44 52v102M76 52v102" stroke-opacity=".5"/><path d="M48 158v14h24v-14"/></svg><svg class="bb4" viewBox="0 0 120 180"><path d="M30 52C22 22 34 6 50 6M90 52C98 22 86 6 70 6M50 6c6 7 14 7 20 0"/><path d="M22 52h76l8 14v78c0 8-5 14-13 14H27c-8 0-13-6-13-14V66z"/><path d="M14 90h92M14 124h92M44 52v102M76 52v102" stroke-opacity=".5"/><path d="M48 158v14h24v-14"/></svg></div>
 
 <!-- ===================== SELECTOR DE LOTES ===================== -->
 <div id="pantalla-lotes">
