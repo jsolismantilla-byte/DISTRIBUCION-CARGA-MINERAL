@@ -221,15 +221,22 @@
   <div class="sub">Cada lote es un booking/cliente independiente. Puedes tener varios abiertos y cambiar entre ellos cuando quieras.</div>
 
   <div class="card" id="card-config-sync" style="display:none">
-    <h2>Compartir datos entre equipos (Google Sheets)</h2>
-    <div class="footnote" style="margin-top:0">Conecta esta app a una Google Sheet para que todos los que entren, desde cualquier telefono o computadora, vean los mismos camiones y contenedores. Sigue la guia "Como conectarlo" que te di junto con este archivo.</div>
+    <h2>Trabajar en equipo (Google Sheets)</h2>
+    <div class="footnote" style="margin-top:0">Todos los que usen la misma conexion ven lo que los demas registran, y viceversa: se actualiza solo cada pocos segundos. Cada persona puede tener abierto un lote distinto.</div>
     <div class="field"><label>URL del Web App (Apps Script)</label><input id="in-sync-url" placeholder="https://script.google.com/macros/s/AKfy.../exec"></div>
     <div class="field"><label>Clave</label><input id="in-sync-clave" placeholder="la misma clave que pusiste en el script"></div>
+    <div class="field"><label>Tu nombre o puesto (para que los demas vean quien cambio algo)</label><input id="in-sync-nombre" placeholder="Ej. Balanza, Patio, Jose"></div>
     <div class="row2">
-      <button class="btn-primary" onclick="guardarConfigSync()">Guardar</button>
+      <button class="btn-primary" onclick="guardarConfigSync()">Guardar y conectar</button>
       <button class="btn-ghost" onclick="sincronizarAhora()">Sincronizar ahora</button>
     </div>
     <div class="footnote" id="sync-estado" style="margin-top:10px">Sin configurar todavia.</div>
+    <div class="footnote" style="margin-top:14px; font-weight:600; color:var(--text-dim)">Compartir con el equipo (sin que tengan que escribir nada):</div>
+    <div class="row2" style="margin-top:6px">
+      <button class="btn-ghost" style="padding:10px" onclick="copiarEnlaceEquipo()">&#128279; Copiar enlace para el equipo</button>
+      <button class="btn-ghost" style="padding:10px" onclick="descargarVersionEquipo()">&#11015; Archivo con la conexion incluida</button>
+    </div>
+    <div class="footnote">El enlace trae la conexion: al abrirlo, el telefono o la computadora se conecta solo. Comparte el enlace solo con tu equipo (incluye la clave). Con "Archivo con la conexion incluida" puedes publicar tu pagina de modo que cualquiera que entre a tu enlace normal ya quede conectado.</div>
   </div>
 
   <div id="lista-lotes"></div>
@@ -252,7 +259,7 @@
     <div>
       <h1>Reparto de Contenedores</h1>
       <div class="lote-info" id="hdr-lote-info"></div>
-      <div class="footnote" id="hdr-sync-estado" style="margin-top:2px"></div>
+      <div class="footnote" id="hdr-sync-estado" style="margin-top:2px; cursor:pointer" onclick="sincronizarAhora()" title="Toca para sincronizar ahora"></div>
     </div>
     <button class="btn-cambiar" onclick="cambiarLote()">Cambiar lote</button>
   </div>
@@ -458,7 +465,7 @@ const OLD_STORE_KEY = "reparto_contenedores_v1";
 const SYNC_KEY = "reparto_sync_config_v1";
 
 let app = { lotes:{}, activo:null };
-let syncConfig = { url:"", clave:"" };
+let syncConfig = { url:"", clave:"", nombre:"" };
 let syncEstadoTxt = "Sin configurar todavia.";
 let syncTimer = null;
 
@@ -495,6 +502,8 @@ function saveLocal(){
   catch(e){ console.warn("No se pudo guardar", e); }
 }
 function saveApp(){
+  const lAct = currentLote();
+  if(lAct) lAct._t = Date.now();                // marca de tiempo: sirve para resolver conflictos entre equipos
   saveLocal();
   subirANube();
 }
@@ -504,10 +513,256 @@ function saveSyncConfig(){
 }
 
 // ---------------------------------------------------------------
-// Sincronizacion con Google Sheets (opcional). Si no hay URL
-// configurada, la app funciona exactamente igual que antes, solo
-// en este telefono/computadora.
+// Sincronizacion en equipo (Google Sheets), version 2.
+// - Cada cambio se sube solo (1 s despues) y cada ~7 s se revisa si otra persona cambio algo.
+// - Si dos personas cambian a la vez, los cambios se FUSIONAN (no se pisan).
+// - Que lote tiene abierto cada quien NO se comparte: cada uno ve el suyo.
 // ---------------------------------------------------------------
+const SYNC_POR_DEFECTO = {url:"https://script.google.com/macros/s/AKfycbwSlbS3rZVBvb1wLdcP4BS9DH27V1Eg4ij6hfC7jzdgyF2zHYYwetK9NrKNc7p9Imc8Fg/exec", clave:""};
+let syncRev = null;            // version del servidor que ya tenemos (null = script version 1)
+let syncBase = null;           // JSON del ultimo estado sincronizado (para fusionar sin pisar lo del otro)
+let syncDirty = false;         // hay cambios locales sin subir
+let syncCambios = 0;
+let syncOcupado = false, syncRepetir = false, syncPushTimer = null, syncRenderDiferido = false;
+let syncPorTxt = "";
+
+// Comparacion de estados que NO depende del orden de las claves ({a:1,b:2} == {b:2,a:1}).
+function jCanon(o){
+  if(Array.isArray(o)) return "[" + o.map(jCanon).join(",") + "]";
+  if(o && typeof o==="object") return "{" + Object.keys(o).sort().filter(function(k){ return o[k]!==undefined; }).map(function(k){ return JSON.stringify(k) + ":" + jCanon(o[k]); }).join(",") + "}";
+  return JSON.stringify(o)===undefined? "undefined" : JSON.stringify(o);
+}
+function jEq(a,b){ return jCanon(a)===jCanon(b); }
+function jClon(o){ return (o===undefined)? undefined : JSON.parse(JSON.stringify(o)); }
+function estadoSincronizable(){
+  return {lotes:app.lotes, meta:{por:(syncConfig.nombre||""), t:Date.now()}};
+}
+
+// ---- fusion de cambios (3 vias: base = ultimo estado sincronizado) ----
+// Regla de oro: lo que ya esta en el servidor conserva sus numeros (indices); lo nuevo de ESTE equipo se agrega
+// DESPUES. Asi lo que se sube siempre "continua" lo anterior y los demas equipos pueden fusionar sin enredarse.
+function fusionarObjeto(b, l, r, gana, transf, ladoT){
+  b = b || {}; l = l || {}; r = r || {};
+  const out = {}, keys = {};
+  [b,l,r].forEach(function(o){ Object.keys(o).forEach(function(k){ keys[k] = true; }); });
+  Object.keys(keys).forEach(function(k){
+    const vb = b[k], vl = l[k], vr = r[k];
+    let v, lado;
+    if(jEq(vl,vr)){ v = vl; lado = "r"; }                       // iguales: ya esta como en el servidor
+    else if(jEq(vl,vb)){ v = vr; lado = "r"; }
+    else if(jEq(vr,vb)){ v = vl; lado = "l"; }
+    else { lado = gana; v = (gana==="l")? vl : vr; }
+    if(v===undefined) return;
+    out[k] = (transf && lado===ladoT)? transf(k, jClon(v)) : jClon(v);
+  });
+  return out;
+}
+// Camiones / contenedores: lo agregado por cada lado se junta (sin duplicar); lo editado se fusiona campo a campo.
+function fusionarArreglo(base, local, remote, clave, gana, transf){
+  const n0 = base.length;
+  const norm = function(x){ return String((x && x[clave]) || "").toUpperCase().replace(/[\s-]/g,""); };
+  const out = [];
+  for(let i=0;i<n0;i++) out.push(fusionarObjeto(base[i], local[i], remote[i], gana, transf, "l"));
+  remote.slice(n0).forEach(function(x){ out.push(jClon(x)); });          // lo nuevo del servidor conserva su numero
+  const mapL = {};                                                       // indice local -> indice fusionado
+  for(let i=0;i<n0;i++) mapL[i] = i;
+  local.slice(n0).forEach(function(x,j){
+    const k = norm(x);
+    let dup = -1;
+    for(let q=n0; q<out.length; q++){
+      if(jEq(out[q], x) || (k && norm(out[q])===k)){ dup = q; break; }   // el mismo item lo agregaron los dos lados
+    }
+    if(dup>=0) mapL[n0+j] = dup;
+    else{
+      const nuevo = jClon(x);
+      if(transf) Object.keys(nuevo).forEach(function(p){ nuevo[p] = transf(p, nuevo[p]); });
+      mapL[n0+j] = out.length;
+      out.push(nuevo);
+    }
+  });
+  return {arr:out, mapL:mapL};
+}
+function fusionarDict(b, l, r, remapKey, gana){
+  b = b || {}; r = r || {};
+  const l2 = {};
+  Object.keys(l || {}).forEach(function(k){ l2[remapKey(k)] = l[k]; });
+  const out = {}, keys = {};
+  [b,l2,r].forEach(function(o){ Object.keys(o).forEach(function(k){ keys[k] = true; }); });
+  Object.keys(keys).forEach(function(k){
+    const vb = b[k], vl = l2[k], vr = r[k];
+    let v;
+    if(jEq(vl,vr)) v = vl;
+    else if(jEq(vl,vb)) v = vr;
+    else if(jEq(vr,vb)) v = vl;
+    else v = (gana==="l")? vl : vr;
+    if(v!==undefined) out[k] = jClon(v);
+  });
+  return out;
+}
+function fusionarLote(b, l, r, avisos){
+  b = b || {};
+  const tl = l._t || 0, tr = r._t || 0;
+  const gana = (tl>=tr)? "l" : "r";
+  const nb = {k:(b.camiones||[]).length, c:(b.contenedores||[]).length};
+  if((l.camiones||[]).length<nb.k || (r.camiones||[]).length<nb.k || (l.contenedores||[]).length<nb.c || (r.contenedores||[]).length<nb.c){
+    avisos.push("Conflicto en el lote " + (l.booking||"") + ": alguien quito camiones o contenedores a la vez; se mantuvo la version mas reciente.");
+    return jClon(gana==="l"? l : r);
+  }
+  // contenedores primero (los camiones guardan referencias a ellos en "anexos")
+  const C = fusionarArreglo(b.contenedores||[], l.contenedores||[], r.contenedores||[], "codigo", gana, null);
+  const remapRef = function(p, v){
+    const f = function(x){ return (x===null || x===undefined || x==="" || isNaN(x))? x : (C.mapL[x]!==undefined? C.mapL[x] : x); };
+    if(p==="anexos" && Array.isArray(v)) return v.map(f);
+    if(p==="enteroIdx" || p==="parcialIdx") return f(v);
+    return v;
+  };
+  const K = fusionarArreglo(b.camiones||[], l.camiones||[], r.camiones||[], "placa", gana, remapRef);
+  const remapKey = function(key){
+    const p = String(key).split("_").map(Number);
+    return (K.mapL[p[0]]!==undefined? K.mapL[p[0]] : p[0]) + "_" + (C.mapL[p[1]]!==undefined? C.mapL[p[1]] : p[1]);
+  };
+  const out = {};
+  const DICTS = {cosco:1, bultosReales:1, estimados:1, traslados:1};
+  const ARR = {camiones:1, contenedores:1};
+  const keys = {};
+  [b,l,r].forEach(function(o){ Object.keys(o).forEach(function(k){ keys[k] = true; }); });
+  Object.keys(keys).forEach(function(k){
+    if(ARR[k]) return;
+    if(DICTS[k]){ out[k] = fusionarDict(b[k], l[k], r[k], remapKey, gana); return; }
+    const vb = b[k], vl = l[k], vr = r[k];
+    let v;
+    if(jEq(vl,vr)) v = vl; else if(jEq(vl,vb)) v = vr; else if(jEq(vr,vb)) v = vl; else v = (gana==="l")? vl : vr;
+    if(v!==undefined) out[k] = jClon(v);
+  });
+  out.camiones = K.arr;
+  out.contenedores = C.arr;
+  out._t = Math.max(tl, tr);
+  return out;
+}
+function fusionarEstado(base, local, remote){
+  const out = {lotes:{}}, avisos = [], ids = {};
+  [base, local, remote].forEach(function(s){ Object.keys((s && s.lotes) || {}).forEach(function(k){ ids[k] = true; }); });
+  Object.keys(ids).forEach(function(id){
+    const b = (base.lotes||{})[id], l = (local.lotes||{})[id], r = (remote.lotes||{})[id];
+    if(l && r){ out.lotes[id] = jEq(l,r)? jClon(l) : fusionarLote(b, l, r, avisos); }
+    else if(l && !r){ if(!b || !jEq(l,b)) out.lotes[id] = jClon(l); }       // nuevo aqui, o editado aqui aunque el otro lo borro
+    else if(!l && r){ if(!b || !jEq(r,b)) out.lotes[id] = jClon(r); }       // nuevo alla, o editado alla aunque aqui se borro
+  });
+  return {estado:out, avisos:avisos};
+}
+
+// ---- comunicacion con el Web App ----
+function fetchConTiempo(url, opts){
+  const ctl = (typeof AbortController!=="undefined")? new AbortController() : null;
+  const t = setTimeout(function(){ if(ctl) ctl.abort(); }, 25000);
+  if(ctl) opts.signal = ctl.signal;
+  return fetch(url, opts).then(function(r){ clearTimeout(t); return r; }, function(e){ clearTimeout(t); throw e; });
+}
+function leerJSONNube(r){
+  if(r && typeof r.text==="function"){
+    return r.text().then(function(t){
+      try{ return JSON.parse(t); }
+      catch(e){ throw new Error("la URL no responde como Web App de Google: debe terminar en /exec y tener acceso 'Cualquier usuario'"); }
+    });
+  }
+  return r.json();
+}
+function nubeGET(extra){
+  return fetchConTiempo(syncConfig.url + "?clave=" + encodeURIComponent(syncConfig.clave||"") + (extra||""), {cache:"no-store"}).then(leerJSONNube);
+}
+function nubePOST(body){
+  return fetchConTiempo(syncConfig.url, {method:"POST", headers:{"Content-Type":"text/plain;charset=utf-8"}, body:JSON.stringify(body)}).then(leerJSONNube);
+}
+function nubeNormalizar(res){
+  if(res && res.error) throw new Error(res.error);
+  if(res && res.data!==undefined) return {rev:(res.rev!==undefined? res.rev : null), data:res.data};
+  if(res && res.lotes!==undefined) return {rev:null, data:res};                 // script version 1
+  return {rev:(res && res.rev!==undefined? res.rev : null), data:{lotes:{}}};
+}
+function trabajoSync(intento){
+  return nubeGET("&solorev=1").then(function(r0){
+    const n0 = nubeNormalizar(r0);
+    if(n0.rev!==null && n0.rev===syncRev && !syncDirty) return "igual";
+    return nubeGET("").then(function(r1){
+      const rem = nubeNormalizar(r1);
+      const remLotes = (rem.data && rem.data.lotes) || {};
+      const base = syncBase? JSON.parse(syncBase) : {lotes:{}};
+      const antes = jCanon(app.lotes);
+      const f = fusionarEstado(base, estadoSincronizable(), {lotes:remLotes});
+      app.lotes = f.estado.lotes;
+      if(app.activo && !app.lotes[app.activo]) app.activo = null;
+      saveLocal();
+      if(f.avisos.length) toast(f.avisos[0]);
+      const bajo = jCanon(app.lotes)!==antes;
+      if(bajo && rem.data && rem.data.meta && rem.data.meta.por) syncPorTxt = rem.data.meta.por;
+      syncRev = rem.rev;
+      syncBase = JSON.stringify({lotes:remLotes});
+      if(jEq(app.lotes, remLotes)){ syncDirty = false; return bajo? "bajo" : "igual"; }
+      const v = syncCambios;
+      return nubePOST({clave:(syncConfig.clave||""), data:estadoSincronizable(), baseRev:syncRev}).then(function(res){
+        if(res && res.conflict){ if(intento>=4) throw new Error("hay mucha actividad al mismo tiempo; se reintentara solo"); return trabajoSync(intento+1); }
+        if(res && res.error) throw new Error(res.error);
+        syncRev = (res && res.rev!==undefined)? res.rev : null;
+        syncBase = JSON.stringify({lotes:jClon(app.lotes)});
+        if(v===syncCambios) syncDirty = false;
+        return bajo? "bajo-y-subio" : "subio";
+      });
+    });
+  });
+}
+function cicloSync(){
+  if(!syncConfig.url) return Promise.resolve("sin-config");
+  if(syncOcupado){ syncRepetir = true; return Promise.resolve("ocupado"); }
+  syncOcupado = true;
+  return trabajoSync(0).then(function(r){
+    syncOcupado = false;
+    const hora = new Date().toLocaleTimeString("es-PE");
+    marcarEstadoSync("Sincronizado " + hora + ((r==="bajo" || r==="bajo-y-subio") && syncPorTxt? (" - cambios de " + syncPorTxt) : "") + (syncRev===null? " | OJO: tu script de Google es la version 1; actualizalo con AppsScript_Backend_v2.gs.txt para que dos personas no se pisen." : " | script v2 OK"));
+    if(r==="bajo" || r==="bajo-y-subio"){
+      refrescarPantallaSync();
+      if(syncPorTxt) toast("Actualizado por " + syncPorTxt);
+    }
+    if(syncRepetir || syncDirty){ syncRepetir = false; programarPush(400); }
+    return r;
+  }).catch(function(e){
+    syncOcupado = false;
+    marcarEstadoSync("Sin conexion o error (" + (e && e.message? e.message : "desconocido") + "). Tus datos estan guardados en este equipo y se subiran solos.");
+    if(syncDirty) programarPush(8000);
+    return "error";
+  });
+}
+function programarPush(ms){
+  if(!syncConfig.url) return;
+  if(syncPushTimer) clearTimeout(syncPushTimer);
+  syncPushTimer = setTimeout(function(){ syncPushTimer = null; cicloSync(); }, ms||1200);
+}
+function subirANube(){
+  if(!syncConfig.url) return;
+  syncDirty = true; syncCambios++;
+  programarPush(1200);
+}
+function usuarioEscribiendo(){
+  const a = (typeof document!=="undefined")? document.activeElement : null;
+  return !!(a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName||"") && a.type!=="checkbox" && a.type!=="button" && a.id!=="in-buscar-camion");
+}
+function refrescarPantallaSync(){
+  if(usuarioEscribiendo()){ syncRenderDiferido = true; return; }     // no se le borra lo que esta escribiendo
+  syncRenderDiferido = false;
+  if(!currentLote()) renderSelectorLotes();
+  else { renderCamiones(); renderContenedores(); renderResumen(); }
+}
+function toast(msg){
+  try{
+    let t = document.getElementById("toast-sync");
+    if(!t){
+      t = document.createElement("div"); t.id = "toast-sync";
+      t.style.cssText = "position:fixed; left:12px; right:12px; bottom:76px; z-index:90; background:var(--surface); border:1px solid var(--amber); color:var(--text); border-radius:10px; padding:10px 12px; font-size:13px; text-align:center; box-shadow:0 4px 18px rgba(0,0,0,.4)";
+      document.body.appendChild(t);
+    }
+    t.textContent = msg; t.style.display = "block";
+    clearTimeout(toast._t); toast._t = setTimeout(function(){ t.style.display = "none"; }, 5000);
+  }catch(e){}
+}
 function marcarEstadoSync(txt){
   syncEstadoTxt = txt;
   const a = document.getElementById("sync-estado");
@@ -515,42 +770,28 @@ function marcarEstadoSync(txt){
   if(a) a.textContent = txt;
   if(b) b.textContent = syncConfig.url? ("\u2601 " + txt) : "";
 }
-function subirANube(){
+function sincronizarAhora(){
+  if(!syncConfig.url){ marcarEstadoSync("Pon primero la URL del Web App."); return Promise.resolve(); }
+  marcarEstadoSync("Sincronizando...");
+  syncDirty = true; syncCambios++;
+  return cicloSync().then(function(r){ if(r!=="bajo" && r!=="bajo-y-subio") refrescarPantallaSync(); return r; });
+}
+function iniciarSincronizacionPeriodica(){
+  if(typeof syncTimer!=="undefined" && syncTimer) clearInterval(syncTimer);
   if(!syncConfig.url) return;
-  fetch(syncConfig.url, {
-    method: "POST",
-    headers: {"Content-Type": "text/plain;charset=utf-8"},
-    body: JSON.stringify({clave: syncConfig.clave||"", data: app})
-  }).then(function(r){ return r.json(); }).then(function(res){
-    if(res && res.ok) marcarEstadoSync("Sincronizado - " + new Date().toLocaleTimeString("es-PE"));
-    else if(res && res.error) marcarEstadoSync("Error: " + res.error);
-    else marcarEstadoSync("Respuesta inesperada al guardar en la nube.");
-  }).catch(function(){
-    marcarEstadoSync("Sin conexion a la nube (se guardo solo en este equipo).");
+  syncTimer = setInterval(function(){
+    if(typeof document!=="undefined" && document.visibilityState==="hidden") return;
+    cicloSync();
+  }, 7000);
+}
+if(typeof document!=="undefined" && document.addEventListener){
+  document.addEventListener("visibilitychange", function(){ if(document.visibilityState==="visible" && syncConfig.url) cicloSync(); });
+  document.addEventListener("focusout", function(){
+    if(syncRenderDiferido) setTimeout(function(){ if(!usuarioEscribiendo()) refrescarPantallaSync(); }, 400);
   });
 }
-function descargarDeNube(callback){
-  if(!syncConfig.url){ if(callback) callback(false); return; }
-  fetch(syncConfig.url + "?clave=" + encodeURIComponent(syncConfig.clave||""))
-    .then(function(r){ return r.json(); })
-    .then(function(remote){
-      if(remote && remote.error){ marcarEstadoSync("Error: " + remote.error); if(callback) callback(false); return; }
-      if(remote && remote.lotes){
-        const cambio = JSON.stringify(remote) !== JSON.stringify(app);
-        app = remote;
-        saveLocal();
-        marcarEstadoSync("Actualizado desde la nube - " + new Date().toLocaleTimeString("es-PE"));
-        if(callback) callback(cambio);
-      }else{
-        marcarEstadoSync("La nube todavia no tiene datos guardados.");
-        if(callback) callback(false);
-      }
-    })
-    .catch(function(){
-      marcarEstadoSync("Sin conexion a la nube.");
-      if(callback) callback(false);
-    });
-}
+
+// ---- configuracion y enlace para el equipo ----
 function toggleConfigSync(){
   const box = document.getElementById("card-config-sync");
   const abrir = box.style.display==="none";
@@ -558,35 +799,61 @@ function toggleConfigSync(){
   if(abrir){
     document.getElementById("in-sync-url").value = syncConfig.url||"";
     document.getElementById("in-sync-clave").value = syncConfig.clave||"";
+    document.getElementById("in-sync-nombre").value = syncConfig.nombre||"";
     marcarEstadoSync(syncEstadoTxt);
   }
 }
 function guardarConfigSync(){
   syncConfig.url = document.getElementById("in-sync-url").value.trim();
   syncConfig.clave = document.getElementById("in-sync-clave").value.trim();
+  syncConfig.nombre = document.getElementById("in-sync-nombre").value.trim();
   saveSyncConfig();
   iniciarSincronizacionPeriodica();
   sincronizarAhora();
 }
-function sincronizarAhora(){
-  if(!syncConfig.url){ marcarEstadoSync("Pon primero la URL del Web App."); return; }
-  marcarEstadoSync("Sincronizando...");
-  descargarDeNube(function(){
-    if(!currentLote()) renderSelectorLotes();
-    else { renderCamiones(); renderContenedores(); renderResumen(); }
-  });
+function codificarEnlaceEquipo(cfg){
+  return btoa(unescape(encodeURIComponent(JSON.stringify({u:cfg.url, c:(cfg.clave||"")}))));
 }
-function iniciarSincronizacionPeriodica(){
-  if(syncTimer) clearInterval(syncTimer);
-  if(!syncConfig.url) return;
-  syncTimer = setInterval(function(){
-    descargarDeNube(function(cambio){
-      if(!cambio) return;
-      if(!currentLote()) renderSelectorLotes();
-      else { renderCamiones(); renderContenedores(); renderResumen(); }
-    });
-  }, 20000);
+function decodificarEnlaceEquipo(h){
+  try{ return JSON.parse(decodeURIComponent(escape(atob(h)))); }catch(e){ return null; }
 }
+function enlaceEquipo(){
+  return String(location.href).split("#")[0] + "#eq=" + codificarEnlaceEquipo(syncConfig);
+}
+// Al abrir un enlace con "#eq=..." la app se conecta sola al equipo (nadie tiene que escribir la URL ni la clave).
+function leerEnlaceEquipo(){
+  const m = /[#&]eq=([^&]+)/.exec(String(location.hash||""));
+  if(!m) return false;
+  const c = decodificarEnlaceEquipo(decodeURIComponent(m[1]));
+  if(!c || !/^https:\/\/script\.google\.com\//.test(c.u||"")) return false;
+  syncConfig.url = c.u; syncConfig.clave = c.c||"";
+  saveSyncConfig();
+  try{ history.replaceState(null, "", location.pathname + location.search); }catch(e){}
+  return true;
+}
+function copiarEnlaceEquipo(){
+  if(!syncConfig.url){ alert("Primero guarda la URL y la clave del Web App."); return; }
+  const url = enlaceEquipo();
+  const aviso = (location.protocol==="file:")? "\n\nOJO: esta pagina esta abierta como archivo en tu equipo. Para que otros puedan abrirla, sube el archivo a un sitio web (por ejemplo GitHub Pages) y vuelve a copiar el enlace desde ahi." : "";
+  if(navigator.share){
+    navigator.share({title:"Reparto de contenedores", text:"Abre este enlace para ver y registrar datos del lote en equipo.", url:url}).catch(function(){});
+  }else if(navigator.clipboard){
+    navigator.clipboard.writeText(url).then(function(){ alert("Enlace copiado. Quien lo abra se conecta solo al lote compartido. Comparte el enlace solo con tu equipo (incluye la clave)." + aviso); },
+      function(){ prompt("Copia este enlace:", url); });
+  }else{ prompt("Copia este enlace:", url); }
+}
+function descargarVersionEquipo(){
+  if(!syncConfig.url){ alert("Primero guarda la URL y la clave del Web App."); return; }
+  if(location.protocol==="file:"){ alert("Abre la pagina desde su direccion web (no como archivo) para generar la version del equipo; o usa 'Copiar enlace para el equipo'."); return; }
+  fetch(String(location.href).split("#")[0], {cache:"no-store"}).then(function(r){ return r.text(); }).then(function(txt){
+    const marca = /const SYNC_POR_DEFECTO = \{[^}]*\};/;
+    if(!marca.test(txt)) throw new Error("No se encontro el lugar donde guardar la conexion.");
+    const nuevo = txt.replace(marca, function(){ return "const SYNC_POR_DEFECTO = " + JSON.stringify({url:syncConfig.url, clave:(syncConfig.clave||"")}) + ";"; });
+    descargarBlob("reparto-contenedores.html", new Blob([nuevo], {type:"text/html"}));
+    alert("Listo. Sube ese archivo en lugar del anterior: todos los que abran tu enlace se conectaran solos.");
+  }).catch(function(e){ alert("No se pudo generar el archivo: " + (e && e.message? e.message : e)); });
+}
+
 
 function fmt(n){
   if(n===null||n===undefined||isNaN(n)) return "-";
@@ -916,6 +1183,9 @@ function renderCamiones(){
         : '';
       const cabecera = '<div class="lin lin-h"><div>Contenedor</div><div>Bultos</div><div>Peso estim.</div><div>Peso COSCO</div><div>Dif. kg</div></div>';
       descargaHtml = (info.splits.length || lineaPiso)? (cabecera + lineas + lineaPiso) : '<div class="footnote">Sin descargas planeadas todavia.</div>';
+      if(info.splits.some(function(s){ return lote.contenedores[s.contIdx].parcial; }) || info.sobranteBultos>0){
+        descargaHtml += '<div style="margin-top:6px"><a href="#" class="footnote" style="color:var(--amber)" onclick="explicarCamion(' + i + ');return false;">&iquest;Por que va a ese parcial? (ver el detalle)</a></div>';
+      }
 
       // ---- aun le quedan bultos por bajar: saldo REAL aproximado (guia - COSCO) ----
       if(hayConfirmadas && bultosPorBajar>=1){
@@ -989,9 +1259,7 @@ function guardarContenedor(){
     c.codigo = codigo; c.tara = tara; c.payload = payload; c.parcial = parcial; c.orden = orden;
     c.metaManual = metaManual;
     if(cerrado && !estabaCerrado){
-      const motivo = motivoNoCerrar(lote, editandoContenedorIdx);
-      if(motivo){ alert(motivo); }
-      else{ registrarCierreContenedor(lote, editandoContenedorIdx); c.cerrado = true; }
+      if(prepararCierre(lote, editandoContenedorIdx)){ registrarCierreContenedor(lote, editandoContenedorIdx); c.cerrado = true; }
     }else if(!cerrado && estabaCerrado){ c.cerrado = false; delete c.fechaCierre; }
     c.generado = false;
     editandoContenedorIdx = null;
@@ -1011,8 +1279,7 @@ function toggleCerrado(i){
   const lote = currentLote();
   const c = lote.contenedores[i];
   if(!c.cerrado){
-    const motivo = motivoNoCerrar(lote, i);
-    if(motivo){ alert(motivo); return; }
+    if(!prepararCierre(lote, i)) return;
     registrarCierreContenedor(lote, i);
     c.cerrado = true;
   }else{
@@ -1567,15 +1834,18 @@ function ordenConFallback(lista, campo, offset){
   });
 }
 function getArrivalOrder(lote){
+  const num = function(c){ return (c.ordenLlegada!=null && c.ordenLlegada!=="" && !isNaN(c.ordenLlegada))? parseFloat(c.ordenLlegada) : null; };
+  const nums = lote.camiones.map(num).filter(function(v){ return v!==null; });
+  const seReinicia = nums.length !== new Set(nums).size;     // numeros repetidos: la llegada vuelve a empezar cada dia
   const conIdx = lote.camiones.map(function(c,idx){
-    const f = unirFechas(c.fechas)[0] || "";             // sin fecha (datos viejos): se consideran los primeros
-    return Object.assign({_idx:idx, _fecha:f}, c);
+    const f = unirFechas(c.fechas)[0] || "";
+    const n = num(c);
+    return {_idx:idx, _fecha:f, _n:(n!==null? n : idx+10000)};
   });
   return conIdx.slice().sort(function(a,b){
+    if(seReinicia && a._fecha!==b._fecha) return a._fecha<b._fecha? -1 : 1;
+    if(a._n!==b._n) return a._n-b._n;
     if(a._fecha!==b._fecha) return a._fecha<b._fecha? -1 : 1;
-    const va = (a.ordenLlegada!=null && a.ordenLlegada!=="" && !isNaN(a.ordenLlegada))? parseFloat(a.ordenLlegada) : (a._idx+10000);
-    const vb = (b.ordenLlegada!=null && b.ordenLlegada!=="" && !isNaN(b.ordenLlegada))? parseFloat(b.ordenLlegada) : (b._idx+10000);
-    if(va!==vb) return va-vb;
     return a._idx-b._idx;
   }).map(function(c){ return c._idx; });
 }
@@ -1931,9 +2201,13 @@ function computeDistributionCore(){
     const pesoPromNom = cam.bultos? cam.peso/cam.bultos : 0;
     const settledSplits = settled.settledSplitsPerTruck[camIdx];
     let bultosPend = (cam.completo && settledSplits.length>0)? 0 : Math.max(0, (cam.bultos||0) - (settled.settledBultosPerTruck[camIdx]||0));
-    const saldoKg = Math.max(0, (cam.peso||0) - (settled.settledPerTruck[camIdx]||0) - (settled.droppedEstPerTruck[camIdx]||0));
+    const saldoKgRaw = (cam.peso||0) - (settled.settledPerTruck[camIdx]||0) - (settled.droppedEstPerTruck[camIdx]||0);
+    const saldoKg = Math.max(0, saldoKgRaw);
     const hayCosco = settledSplits.some(function(s){ return !s.sinPesar; });
     const pesoProm = settled.pesoBultoEf[camIdx] || pesoPromNom;
+    // Si el peso que le queda (guia - COSCO - bajado) no alcanza ni para un bigbag, la unidad ya descargo
+    // todo: la diferencia es de balanza y no se le planifican bultos "fantasma" por redondeo.
+    if(hayCosco && bultosPend>=1 && saldoKgRaw <= 0.6*pesoPromNom && saldoKgRaw >= -1.5*pesoPromNom) bultosPend = 0;
     const pendingSplits = [];
     const yaLiquidadoAqui = {};
     settledSplits.forEach(function(s){ yaLiquidadoAqui[s.contIdx] = true; });
@@ -3343,6 +3617,81 @@ function exportPDF(){
 }
 
 // ---------------------------------------------------------------
+// Diagnostico: por que el saldo de una unidad va a ese parcial
+// ---------------------------------------------------------------
+let diagTexto = "";
+function explicarCamion(i){
+  const lote = currentLote();
+  const dist = computeDistribution();
+  const cam = lote.camiones[i], info = dist.perCamion[i];
+  const arr = getArrivalOrder(lote);
+  const pos = arr.indexOf(i) + 1;
+  const ranks = getParcialRanks(lote);
+  const nom = function(idx){ const c = lote.contenedores[idx]; return c.codigo + " (parcial " + (ranks[idx]||"?") + ")"; };
+  const estado = function(s){ return s.settled? "COSCO" : (s.bajado? "bajado" : "plan"); };
+  const contenido = {};
+  arr.forEach(function(k){
+    dist.perCamion[k].splits.forEach(function(s){
+      (contenido[s.contIdx] = contenido[s.contIdx] || []).push({k:k, placa:lote.camiones[k].placa, bultos:s.bultos, st:estado(s)});
+    });
+  });
+  const lineas = [];
+  lineas.push("Unidad " + cam.placa + ": posicion " + pos + " de " + arr.length + " en el orden de proceso (llegada " + (cam.ordenLlegada!=null && cam.ordenLlegada!==""? cam.ordenLlegada : "sin numero") + ", fecha " + fechasTxt(cam.fechas) + ").");
+  const saldo = info.splits.filter(function(s){ return lote.contenedores[s.contIdx].parcial; });
+  lineas.push("Su saldo va a: " + (saldo.length? saldo.map(function(s){ return nom(s.contIdx) + " " + s.bultos + " bultos (" + estado(s) + ")" + (s.manual? " [anexado a mano]" : ""); }).join(" + ") : "ningun parcial") + (info.sobranteBultos? (" | SIN CONTENEDOR: " + info.sobranteBultos + " bultos") : "") + ".");
+  lineas.push("Su primera bajada " + (info.primeraConfirmada? "TIENE" : "NO tiene") + " peso COSCO.");
+  lineas.push("");
+  lineas.push("PARCIALES ABIERTOS (en orden ascendente) y que lleva cada uno:");
+  getOrderedContainers(lote, true).forEach(function(idx){
+    const lst = contenido[idx] || [];
+    const kg = lst.reduce(function(a,x){ return a; }, 0);
+    let peso = 0; dist.perCamion.forEach(function(inf){ inf.splits.forEach(function(s){ if(s.contIdx===idx) peso += s.peso; }); });
+    lineas.push("- " + nom(idx) + ": " + fmt(peso) + " kg de meta " + fmt(dist.targets[idx]||0) + " kg | " + (lst.length? lst.map(function(x){ return x.placa + " " + x.bultos + "b " + x.st + (x.k===i? " <== ESTA UNIDAD" : ""); }).join(", ") : "vacio"));
+  });
+  const antes = arr.slice(0, pos-1).filter(function(k){
+    const inf = dist.perCamion[k];
+    return inf.splits.some(function(s){ return !s.settled && !s.bajado; }) || inf.sobranteBultos>0;
+  });
+  lineas.push("");
+  const sinReg = antes.map(function(k){
+    const inf = dist.perCamion[k];
+    const b = inf.splits.filter(function(s){ return !s.settled && !s.bajado; }).reduce(function(a,s){ return a+s.bultos; },0) + (inf.sobranteBultos||0);
+    return {k:k, placa:lote.camiones[k].placa, bultos:b, donde:inf.splits.filter(function(s){ return !s.settled && !s.bajado; }).map(function(s){ return lote.contenedores[s.contIdx].codigo; }).join("+") || "sin contenedor", confirmada:inf.splits.some(function(s){ return s.settled; })};
+  });
+  if(sinReg.length){
+    lineas.push("ATENCION: " + sinReg.length + " unidad(es) ANTERIORES a " + cam.placa + " todavia tienen bultos SIN registrar, y el plan los reserva en los parciales de arriba:");
+    sinReg.forEach(function(x){ lineas.push("- " + x.placa + ": " + x.bultos + " bultos -> " + x.donde); });
+  }else{
+    lineas.push("Ninguna unidad anterior tiene bultos pendientes: el saldo va al primer parcial abierto con espacio.");
+  }
+  diagTexto = lineas.join("\n");
+  const esc = function(t){ return String(t).replace(/&/g,"&amp;").replace(/</g,"&lt;"); };
+  let html = "<h2>&iquest;Por que " + esc(cam.placa) + " va a ese parcial?</h2>"
+    + '<pre style="white-space:pre-wrap; font-family:var(--mono); font-size:12px; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px; max-height:55vh; overflow:auto">' + esc(diagTexto) + "</pre>";
+  if(sinReg.length){
+    const marcables = sinReg.filter(function(x){ return x.confirmada; }).map(function(x){ return x.k; });
+    html += '<div class="banner" style="margin-top:8px">Si esas unidades <b>ya descargaron todo</b> pero el sistema no lo sabe, hay dos caminos: '
+      + '(1) <b>reabre</b> los parciales que cerraste y vuelve a cerrarlos aceptando "darlas por descargadas" (queda registrado en el contenedor correcto), o '
+      + '(2) marca estas unidades como descargadas (no registra pesos, pero el reparto deja de reservarles lugar).</div>';
+    if(marcables.length) html += '<button class="btn-primary" style="margin-top:8px; width:100%" onclick="darPorDescargadas([' + marcables.join(",") + '])">Dar por descargadas estas ' + marcables.length + ' unidades</button>';
+  }
+  html += '<div class="row2" style="margin-top:10px"><button class="btn-ghost" onclick="copiarDiagnostico()">Copiar este informe</button><button class="btn-ghost" onclick="cerrarFoto()">Cerrar</button></div>';
+  fotoModal(html);
+}
+function copiarDiagnostico(){
+  try{ navigator.clipboard.writeText(diagTexto); alert("Informe copiado. Puedes pegarlo en un mensaje."); }
+  catch(e){ alert("No se pudo copiar automaticamente; mantén presionado el texto para copiarlo."); }
+}
+function darPorDescargadas(lista){
+  const lote = currentLote();
+  if(!confirm("Se marcaran " + lista.length + " unidad(es) como 'ya descargo todos sus bultos'. El peso de lo que bajaron despues de su primera descarga no queda registrado. ¿Continuar?")) return;
+  lista.forEach(function(k){ lote.camiones[k].completo = true; });
+  saveApp();
+  cerrarFoto();
+  renderCamiones(); renderContenedores();
+}
+
+// ---------------------------------------------------------------
 // FOTO DE UNA LISTA -> contenedores / camiones
 // La foto se lee con OCR en el propio telefono y SIEMPRE se muestra para revisar antes de agregar.
 // ---------------------------------------------------------------
@@ -3845,6 +4194,37 @@ function esPrimerRegistro(lote, key){
   const hay = function(v){ return v!==undefined && v!==null && v!=="" && !isNaN(v); };
   return !hay(co) && !hay(br);
 }
+// Descargas que el plan tiene en este contenedor pero que aun NO se registraron (ni bultos reales ni COSCO).
+function pendientesEnContenedor(lote, idx){
+  const dist = computeDistribution();
+  const out = [];
+  dist.perCamion.forEach(function(info, ci){
+    info.splits.forEach(function(s){
+      if(s.contIdx===idx && !s.settled && !s.bajado && s.bultos>0) out.push({camIdx:ci, placa:lote.camiones[ci].placa, bultos:s.bultos, peso:s.peso});
+    });
+  });
+  return out;
+}
+// Cerrar un contenedor = "ya se trabajo". Si el plan aun tenia descargas ahi sin registrar, se confirman como
+// hechas; si no, esos bultos se volverian a planificar en OTROS contenedores y correrian todo el reparto.
+function prepararCierre(lote, i){
+  const motivo = motivoNoCerrar(lote, i);
+  if(motivo){ alert(motivo); return false; }
+  const pend = pendientesEnContenedor(lote, i);
+  if(pend.length){
+    const lista = pend.map(function(p){ return p.placa + " (" + p.bultos + " bultos)"; }).join(", ");
+    if(!confirm("Este contenedor tiene descargas PLANIFICADAS que aun no registraste: " + lista + ".\n\nAceptar = darlas por descargadas tal como estan planificadas y cerrar el contenedor.\nCancelar = no cerrar todavia (registra antes sus bultos / COSCO).")) return false;
+    if(!lote.estimados) lote.estimados = {};
+    if(!lote.bultosReales) lote.bultosReales = {};
+    pend.forEach(function(p){
+      const key = p.camIdx + "_" + i;
+      if(!lote.estimados[key]) lote.estimados[key] = {peso:p.peso, bultos:p.bultos, pb:p.peso/p.bultos};
+      lote.bultosReales[key] = p.bultos;
+      registrarFechaTrabajo(lote, p.camIdx, i);
+    });
+  }
+  return true;
+}
 // Un parcial con saldo ESTIMADO (sin COSCO de la primera bajada de esa unidad) no se puede cerrar.
 function motivoNoCerrar(lote, i){
   const c = lote.contenedores[i];
@@ -3923,8 +4303,11 @@ function vaciarLote(){
 }
 
 loadApp();
+if(SYNC_POR_DEFECTO.url){ syncConfig.url = SYNC_POR_DEFECTO.url; if(SYNC_POR_DEFECTO.clave) syncConfig.clave = SYNC_POR_DEFECTO.clave; saveSyncConfig(); }   // version publicada para el equipo
+const vieneDeEnlace = leerEnlaceEquipo();
 mostrarPantalla();
 if(syncConfig.url){
+  if(vieneDeEnlace) toast("Conectado al lote compartido del equipo");
   sincronizarAhora();
   iniciarSincronizacionPeriodica();
 }
